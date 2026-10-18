@@ -301,8 +301,15 @@ func extractText(raw json.RawMessage) []string {
 }
 
 // appendRing appends a snippet to a chronological ring buffer capped at
-// capN entries, dropping the oldest when full.
+// capN entries, dropping the oldest when full. Deduplicates by exact
+// text match — if an identical snippet is already in the ring, the
+// incoming one is dropped. Repetition is still visible via Hit.MatchCount.
 func appendRing(ring []Snippet, s Snippet, capN int) []Snippet {
+	for _, existing := range ring {
+		if existing.Text == s.Text {
+			return ring
+		}
+	}
 	if len(ring) < capN {
 		return append(ring, s)
 	}
