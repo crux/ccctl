@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 
 	"github.com/crux/claudectl/internal/proc"
 	"github.com/crux/claudectl/internal/project"
@@ -17,6 +18,8 @@ var (
 	findCaseSensitive bool
 	findBrief         bool
 	findLastN         int
+	findUUID          string
+	findColor         string
 )
 
 var findCmd = &cobra.Command{
@@ -26,16 +29,22 @@ var findCmd = &cobra.Command{
 
 Default scope is all projects. Use --here to restrict to the current
 project's sessions, or pass a project directory as a positional arg to
-restrict to that one.
+restrict to that one. Use --uuid to scope the search to a single
+session (prefix match on the UUID is enough).
 
 Case-insensitive substring match by default (use -s for case-sensitive).
 
-Output: one row per matching session with mtime, match count, UUID,
-project and title. The 'M' column is the total number of pattern
-occurrences in user+assistant text — a rough signal of how much the
-topic was discussed. Below each row, a snippet from the last match in
-the session; --last N shows the last N snippets in chronological order.
---brief drops the snippets but keeps the table.`,
+Output: one row per matching session with a leading active marker
+("*" for a running claude process on that session, "~" for the
+newest-in-dir guess fallback), mtime, match count, UUID, project and
+title. The 'M' column is the total number of pattern occurrences in
+user+assistant text — a rough signal of how much the topic was
+discussed. Below each row, a snippet from the last match in the
+session; --last N shows the last N snippets in chronological order.
+--brief drops the snippets but keeps the table.
+
+Matches inside snippets are highlighted when stdout is a terminal; use
+--color always|never|auto (default auto) to override.`,
 	Args: func(cmd *cobra.Command, args []string) error {
 		if len(args) == 1 || len(args) == 2 {
 			return nil
@@ -50,6 +59,8 @@ func init() {
 	findCmd.Flags().BoolVarP(&findCaseSensitive, "case-sensitive", "s", false, "respect case (default is case-insensitive)")
 	findCmd.Flags().BoolVar(&findBrief, "brief", false, "drop snippets; keep table and match count")
 	findCmd.Flags().IntVar(&findLastN, "last", 1, "show last N snippets per session, chronological")
+	findCmd.Flags().StringVar(&findUUID, "uuid", "", "scope to one session (UUID prefix is enough)")
+	findCmd.Flags().StringVar(&findColor, "color", "auto", "highlight matches in snippets: always|never|auto")
 }
 
 func runFind(cmd *cobra.Command, args []string) error {
@@ -70,6 +81,7 @@ func runFind(cmd *cobra.Command, args []string) error {
 		Pattern:       pattern,
 		CaseSensitive: findCaseSensitive,
 		LastN:         findLastN,
+		UUIDPrefix:    findUUID,
 	}
 	switch {
 	case findHere:
@@ -103,23 +115,16 @@ func runFind(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	// Enrich each hit with authoritative title/cwd from PIDSession
-	// (live sessions) or session.ReadMeta (closed). Scoped to the
-	// subset of sessions that actually matched, so the extra I/O
-	// stays proportional to results, not corpus size.
 	for i := range hits {
 		enrichHit(&hits[i])
 	}
 
-	printHits(os.Stdout, hits, findBrief)
+	confident, guessed, _ := proc.ActiveUUIDs()
+	useColor := resolveColor(findColor)
+	printHits(os.Stdout, hits, pattern, findCaseSensitive, findBrief, useColor, confident, guessed)
 	return nil
 }
 
-// enrichHit fills in Title and ProjectDir using the best available
-// source. PIDSession (if the session is currently open by a running
-// claude process) is authoritative for both. For closed sessions,
-// session.ReadMeta provides the title via its reverse-chunk scan;
-// ProjectDir may remain whatever the .jsonl itself revealed.
 func enrichHit(h *search.Hit) {
 	if ps, _ := proc.FindPIDBySessionID(h.UUID); ps != nil {
 		if ps.Name != "" {
@@ -141,41 +146,78 @@ func enrichHit(h *search.Hit) {
 	}
 }
 
-// printHits emits the formatted table. Hand-rolled rather than
-// tabwriter so snippets can be indented a fixed amount from the left
-// margin without being pushed around by title width.
-func printHits(w *os.File, hits []search.Hit, brief bool) {
+func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, brief, color bool, confident, guessed map[string]bool) {
 	const (
-		projMax  = 32
-		titleMax = 0 // 0 = no truncation
+		projMax = 32
 	)
 
-	// Header
-	fmt.Fprintf(w, "%-16s  %6s  %-36s  %-*s  %s\n",
+	// Column widths picked so headers align with data rows. Leading
+	// gutter is one char for the active marker.
+	fmt.Fprintf(w, "   %-16s  %6s  %-36s  %-*s  %s\n",
 		"MTIME", "M", "UUID", projMax, "PROJECT", "TITLE")
 
+	var hl *regexp.Regexp
+	if color {
+		flags := "(?i)"
+		if caseSensitive {
+			flags = ""
+		}
+		hl = regexp.MustCompile(flags + regexp.QuoteMeta(pattern))
+	}
+
 	for _, h := range hits {
+		marker := " "
+		switch {
+		case confident[h.UUID]:
+			marker = "*"
+		case guessed[h.UUID]:
+			marker = "~"
+		}
 		title := h.Title
 		if title == "" {
 			title = "(no title)"
 		}
-		fmt.Fprintf(w, "%-16s  %6d  %-36s  %-*s  %s\n",
+		fmt.Fprintf(w, "%s  %-16s  %6d  %-36s  %-*s  %s\n",
+			marker,
 			h.MTime.Format("2006-01-02 15:04"),
 			h.MatchCount,
 			h.UUID,
 			projMax, truncate(shortProject(h.ProjectDir), projMax),
 			title)
-		if !brief {
-			for _, s := range h.Snippets {
-				fmt.Fprintf(w, "    %s: %q\n", s.Role, s.Text)
+		if brief {
+			continue
+		}
+		for _, s := range h.Snippets {
+			text := s.Text
+			if hl != nil {
+				text = hl.ReplaceAllStringFunc(text, highlightMatch)
 			}
+			// Role padded to width of "assistant" (9) so content aligns.
+			fmt.Fprintf(w, "    %-9s  %s\n", s.Role, text)
 		}
 	}
 }
 
-// shortProject condenses a cwd like /Users/x/work/src/shop into
-// "work/src/shop" by taking the final two path components, mirroring
-// the shortening used by `ps` and `sessions`.
+func highlightMatch(m string) string {
+	return "\033[1;33m" + m + "\033[0m" // bold yellow
+}
+
+// resolveColor decides whether ANSI colors are safe to emit.
+// Honours NO_COLOR for auto mode (standard convention).
+func resolveColor(mode string) bool {
+	switch mode {
+	case "always":
+		return true
+	case "never":
+		return false
+	}
+	if os.Getenv("NO_COLOR") != "" {
+		return false
+	}
+	fi, _ := os.Stdout.Stat()
+	return fi != nil && (fi.Mode()&os.ModeCharDevice) != 0
+}
+
 func shortProject(p string) string {
 	if p == "" {
 		return "-"
@@ -197,3 +239,4 @@ func truncate(s string, max int) string {
 	}
 	return s[:max-1] + "…"
 }
+

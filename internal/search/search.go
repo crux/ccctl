@@ -48,6 +48,7 @@ type Opts struct {
 	Pattern       string // required
 	CaseSensitive bool   // default is case-insensitive
 	ProjectDir    string // if "", searches all projects (~/.claude/projects/*)
+	UUIDPrefix    string // if non-empty, scan only sessions whose UUID starts with this
 	LastN         int    // snippets kept per session, oldest-first; <=0 means 1
 	Workers       int    // parallel file scanners; <=0 means a sensible default (16)
 }
@@ -77,6 +78,12 @@ func Search(opts Opts) ([]Hit, error) {
 	paths, err := enumerateSessionPaths(opts.ProjectDir)
 	if err != nil {
 		return nil, err
+	}
+	if opts.UUIDPrefix != "" {
+		paths = filterByUUIDPrefix(paths, opts.UUIDPrefix)
+		if len(paths) == 0 {
+			return nil, fmt.Errorf("no session matching UUID prefix %q", opts.UUIDPrefix)
+		}
 	}
 	if len(paths) == 0 {
 		return nil, nil
@@ -127,6 +134,19 @@ func Search(opts Opts) ([]Hit, error) {
 
 	sort.Slice(hits, func(i, j int) bool { return hits[i].MTime.After(hits[j].MTime) })
 	return hits, nil
+}
+
+// filterByUUIDPrefix keeps only paths whose basename (minus .jsonl)
+// starts with the given prefix. Enables UUID shortcuts for --uuid.
+func filterByUUIDPrefix(paths []string, prefix string) []string {
+	var out []string
+	for _, p := range paths {
+		uuid := strings.TrimSuffix(filepath.Base(p), ".jsonl")
+		if strings.HasPrefix(uuid, prefix) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // enumerateSessionPaths returns the set of .jsonl paths to scan.
