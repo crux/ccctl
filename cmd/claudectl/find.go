@@ -155,23 +155,20 @@ func enrichHit(h *search.Hit) {
 }
 
 // Column layout constants. Data row:
-//   MTIME    col 3-18    (16 chars)
-//   M        col 21-26   (6 chars, right-aligned)
-//   PROJECT  col 29-60   (32 chars)
-//   TITLE    col 63-112  (50 chars, wraps in-column)
-//   UUID     col 115-150 (36 chars, first line only)
+//   MTIME        col 3-18    (16 chars)
+//   M            col 21-26   (6 chars, right-aligned)
+//   PROJECT      col 29-60   (32 chars)
+//   TITLE+UUID   col 63-...  (fused: "title (uuid)", wraps freely)
 //
-// Snippet cell spans TITLE+UUID (col 63-150, 88 chars text width).
-// Role char at col 61 (in the 2-char pad between PROJECT and TITLE),
-// snippet text starts at col 63 and wraps back to that column.
+// Snippet cell spans PROJECT+TITLE+UUID (col 29 to terminal edge).
+// Role char at col 27 (in the pad between M and PROJECT), snippet
+// text starts at col 29 and wraps back to that column.
 const (
-	findProjMax      = 32
-	findTitleStart   = 63
-	findTitleMax     = 50
-	findUUIDStart    = findTitleStart + findTitleMax + 2 // 115
-	findSnippetStart = findTitleStart                    // 63
-	findSnippetEnd   = findUUIDStart + 36                // 151 (exclusive)
-	findMinWrapWidth = 20
+	findProjMax       = 32
+	findTitleStart    = 63
+	findSnippetStart  = 29 // PROJECT start — snippet text column
+	findRolePrefixCol = 27 // role char lives at snippet start - 2
+	findMinWrapWidth  = 20
 )
 
 func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, brief, color bool, active proc.ActiveSet) {
@@ -184,13 +181,11 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 		}
 	}
 
-	// Header: UUID now last. TITLE padded to findTitleMax so UUID
-	// aligns across rows.
-	fmt.Fprintf(w, "   %-16s  %6s  %-*s  %-*s  %s\n",
+	// Header: TITLE and UUID are fused into a single column.
+	fmt.Fprintf(w, "   %-16s  %6s  %-*s  %s\n",
 		"MTIME", "M",
 		findProjMax, "PROJECT",
-		findTitleMax, "TITLE",
-		"UUID")
+		"TITLE  (UUID)")
 
 	var hl *regexp.Regexp
 	if color {
@@ -218,21 +213,19 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 				title = title + "  (" + st + ")"
 			}
 		}
-		// TITLE wraps within its 50-char column.
-		titleLines := wrapSnippet(title, findTitleStart, findTitleStart+findTitleMax, termWidth)
+		// TITLE+UUID fused as "title (uuid)" and wraps freely at the
+		// title column, bounded only by terminal width.
+		fullTitle := title + "  (" + h.UUID + ")"
+		titleLines := wrapSnippet(fullTitle, findTitleStart, 0, termWidth)
 		if len(titleLines) == 0 {
-			titleLines = []string{title}
+			titleLines = []string{fullTitle}
 		}
-		// Data row: MTIME, M, PROJECT, TITLE (first line, padded), UUID.
-		fmt.Fprintf(w, "%s  %-16s  %6d  %-*s  %-*s  %s\n",
+		fmt.Fprintf(w, "%s  %-16s  %6d  %-*s  %s\n",
 			marker,
 			h.MTime.Format("2006-01-02 15:04"),
 			h.MatchCount,
 			findProjMax, truncate(shortProject(h.ProjectDir), findProjMax),
-			findTitleMax, titleLines[0],
-			h.UUID)
-		// TITLE continuation lines — no UUID on these; they stay in
-		// the title column and don't push UUID around.
+			titleLines[0])
 		for i := 1; i < len(titleLines); i++ {
 			fmt.Fprintf(w, "%*s%s\n", findTitleStart, "", titleLines[i])
 		}
@@ -244,19 +237,14 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 			if hl != nil {
 				text = hl.ReplaceAllStringFunc(text, highlightMatch)
 			}
-			// Snippet lives in the UUID+PROJECT cell. First line gets
-			// a 2-char role prefix (letter + space) at col
-			// findSnippetStart-2 so the actual snippet still starts at
-			// findSnippetStart; continuation lines indent to that same
-			// column with no prefix.
-			lines := wrapSnippet(text, findSnippetStart, findSnippetEnd, termWidth)
-			rolePrefix := "? "
-			if len(s.Role) > 0 {
-				rolePrefix = string(s.Role[0]) + " "
-			}
+			// Snippet starts at PROJECT column (col 29) and wraps
+			// freely to the terminal edge. Role char at col 27 with
+			// a trailing space, so text column 29 is the anchor.
+			lines := wrapSnippet(text, findSnippetStart, 0, termWidth)
+			rolePrefix := roleChar(s.Role) + " "
 			for i, line := range lines {
 				if i == 0 {
-					fmt.Fprintf(w, "%*s%s%s\n", findSnippetStart-2, "", rolePrefix, line)
+					fmt.Fprintf(w, "%*s%s%s\n", findRolePrefixCol, "", rolePrefix, line)
 				} else {
 					fmt.Fprintf(w, "%*s%s\n", findSnippetStart, "", line)
 				}
@@ -327,6 +315,20 @@ func visualWidth(s string) int {
 
 func highlightMatch(m string) string {
 	return "\033[1;33m" + m + "\033[0m" // bold yellow
+}
+
+// roleChar maps a message role to a single-character marker used as
+// the snippet-row prefix. ">" for user (prompt-arrow direction), "<"
+// for assistant (reply direction). Unknown roles get "?".
+func roleChar(role string) string {
+	switch role {
+	case "user":
+		return ">"
+	case "assistant":
+		return "<"
+	default:
+		return "?"
+	}
 }
 
 // resolveColor decides whether ANSI colors are safe to emit.
