@@ -154,22 +154,24 @@ func enrichHit(h *search.Hit) {
 	}
 }
 
-// Column layout constants. In the data row:
+// Column layout constants. Data row:
+//   MTIME    col 3-18    (16 chars)
 //   M        col 21-26   (6 chars, right-aligned)
-//   UUID     col 29-64   (36 chars)
-//   PROJECT  col 67-98   (32 chars)
-//   TITLE    col 101+    (free)
+//   PROJECT  col 29-60   (32 chars)
+//   TITLE    col 63-112  (50 chars, wraps in-column)
+//   UUID     col 115-150 (36 chars, first line only)
 //
-// Snippet "cell" covers M + UUID + PROJECT: role char at col 21,
-// space at col 22, snippet text starting at col 23 and wrapping up
-// to col 99 (just before the TITLE column). Continuation lines indent
-// to the text column (23).
+// Snippet cell spans TITLE+UUID (col 63-150, 88 chars text width).
+// Role char at col 61 (in the 2-char pad between PROJECT and TITLE),
+// snippet text starts at col 63 and wraps back to that column.
 const (
 	findProjMax      = 32
-	findSnippetStart = 23  // snippet TEXT column (role char lives at start-2)
-	findSnippetEnd   = 99  // snippet cell boundary — just before TITLE
-	findTitleStart   = 101 // where TITLE begins; wrap continuations indent here
-	findMinWrapWidth = 20  // too-narrow fallback: emit single line, let terminal wrap
+	findTitleStart   = 63
+	findTitleMax     = 50
+	findUUIDStart    = findTitleStart + findTitleMax + 2 // 115
+	findSnippetStart = findTitleStart                    // 63
+	findSnippetEnd   = findUUIDStart + 36                // 151 (exclusive)
+	findMinWrapWidth = 20
 )
 
 func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, brief, color bool, active proc.ActiveSet) {
@@ -182,10 +184,13 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 		}
 	}
 
-	// Column widths picked so headers align with data rows. Leading
-	// gutter is one char for the active marker.
-	fmt.Fprintf(w, "   %-16s  %6s  %-36s  %-*s  %s\n",
-		"MTIME", "M", "UUID", findProjMax, "PROJECT", "TITLE")
+	// Header: UUID now last. TITLE padded to findTitleMax so UUID
+	// aligns across rows.
+	fmt.Fprintf(w, "   %-16s  %6s  %-*s  %-*s  %s\n",
+		"MTIME", "M",
+		findProjMax, "PROJECT",
+		findTitleMax, "TITLE",
+		"UUID")
 
 	var hl *regexp.Regexp
 	if color {
@@ -208,26 +213,26 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 		if title == "" {
 			title = "(no title)"
 		}
-		// Append (busy) when the session is actively processing.
 		if active.Confident[h.UUID] {
 			if st := active.Status[h.UUID]; st != "" && st != "idle" {
 				title = title + "  (" + st + ")"
 			}
 		}
-		// Wrap the title in its column: first line prints inline with
-		// the data row, continuations indent to findTitleStart.
-		// endCol=0 means "no cell boundary; use terminal width only".
-		titleLines := wrapSnippet(title, findTitleStart, 0, termWidth)
+		// TITLE wraps within its 50-char column.
+		titleLines := wrapSnippet(title, findTitleStart, findTitleStart+findTitleMax, termWidth)
 		if len(titleLines) == 0 {
 			titleLines = []string{title}
 		}
-		fmt.Fprintf(w, "%s  %-16s  %6d  %-36s  %-*s  %s\n",
+		// Data row: MTIME, M, PROJECT, TITLE (first line, padded), UUID.
+		fmt.Fprintf(w, "%s  %-16s  %6d  %-*s  %-*s  %s\n",
 			marker,
 			h.MTime.Format("2006-01-02 15:04"),
 			h.MatchCount,
-			h.UUID,
 			findProjMax, truncate(shortProject(h.ProjectDir), findProjMax),
-			titleLines[0])
+			findTitleMax, titleLines[0],
+			h.UUID)
+		// TITLE continuation lines — no UUID on these; they stay in
+		// the title column and don't push UUID around.
 		for i := 1; i < len(titleLines); i++ {
 			fmt.Fprintf(w, "%*s%s\n", findTitleStart, "", titleLines[i])
 		}
