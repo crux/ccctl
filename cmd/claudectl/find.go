@@ -154,15 +154,20 @@ func enrichHit(h *search.Hit) {
 	}
 }
 
-// Column layout constants. In the data row, UUID starts at
-// findSnippetStart and PROJECT ends at findSnippetEnd. Snippets live in
-// the UUID+PROJECT "cell" — anchored at findSnippetStart, wrapping at
-// findSnippetEnd (or terminal edge, whichever is narrower) so they
-// never bleed into the TITLE column.
+// Column layout constants. In the data row:
+//   M        col 21-26   (6 chars, right-aligned)
+//   UUID     col 29-64   (36 chars)
+//   PROJECT  col 67-98   (32 chars)
+//   TITLE    col 101+    (free)
+//
+// Snippet "cell" covers M + UUID + PROJECT: role char at col 21,
+// space at col 22, snippet text starting at col 23 and wrapping up
+// to col 99 (just before the TITLE column). Continuation lines indent
+// to the text column (23).
 const (
 	findProjMax      = 32
-	findSnippetStart = 29 // column where UUID starts; snippet text aligns here
-	findSnippetEnd   = 99 // = findSnippetStart + 36 (UUID) + 2 (pad) + 32 (PROJECT)
+	findSnippetStart = 23 // snippet TEXT column (role char lives at start-2)
+	findSnippetEnd   = 99 // cell boundary — just before TITLE
 	findMinWrapWidth = 20 // too-narrow fallback: emit single line, let terminal wrap
 )
 
