@@ -44,11 +44,16 @@ func runPs(cmd *cobra.Command, args []string) error {
 	// bodies start at the same column either way.
 	fmt.Fprintln(w, "PID\tVERSION\tDIR\t UUID\tTITLE")
 	for _, p := range procs {
-		title := "(no title)"
-		if p.SessionFile != "" {
+		title := p.Title
+		if title == "" && p.SessionFile != "" {
+			// Fallback for legacy-path PIDs where the title didn't come
+			// from PIDSession.Name — read the .jsonl ourselves.
 			if meta, err := session.ReadMeta(p.SessionFile); err == nil {
 				title = meta.Display()
 			}
+		}
+		if title == "" {
+			title = "(no title)"
 		}
 		var uuid string
 		switch {
