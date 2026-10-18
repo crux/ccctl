@@ -157,6 +157,7 @@ type Info struct {
 	SessionFile string // absolute path to the .jsonl; "" if unknown
 	Title       string // session display title from PIDSession.Name; "" if
 	                   // unknown (callers may fall back to session.ReadMeta)
+	Status      string // "idle" / "busy" / "" (unknown — e.g. legacy path)
 	GuessedUUID bool   // true when UUID came from the newest-in-project-dir
 	                   // fallback; may be wrong if the project has multiple
 	                   // active sessions. Only set in the legacy path.
@@ -186,6 +187,7 @@ func ListClaudeProcesses() ([]Info, error) {
 				UUID:        ps.SessionID,
 				SessionFile: project.SessionFile(ps.Cwd, ps.SessionID),
 				Title:       ps.Name,
+				Status:      ps.Status,
 			})
 			continue
 		}

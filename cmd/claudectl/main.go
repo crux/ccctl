@@ -39,6 +39,7 @@ func init() {
 	rootCmd.AddCommand(restoreCmd)
 	rootCmd.AddCommand(whereCmd)
 	rootCmd.AddCommand(focusCmd)
+	rootCmd.AddCommand(takeoverCmd)
 	// Silence cobra's default error echo — main prints via Fprintln above.
 	rootCmd.SilenceErrors = true
 	rootCmd.SilenceUsage = true

@@ -55,6 +55,13 @@ func runPs(cmd *cobra.Command, args []string) error {
 		if title == "" {
 			title = "(no title)"
 		}
+		// Append a trailing "(busy)" when the session is actively
+		// processing. "idle" is the common state and left unmarked to
+		// keep the output quiet; anything else gets shown verbatim so
+		// future statuses surface automatically.
+		if p.Status != "" && p.Status != "idle" {
+			title = title + "  (" + p.Status + ")"
+		}
 		var uuid string
 		switch {
 		case p.UUID == "":
