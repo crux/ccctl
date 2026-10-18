@@ -5,12 +5,15 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/crux/claudectl/internal/proc"
 	"github.com/crux/claudectl/internal/project"
 	"github.com/crux/claudectl/internal/search"
 	"github.com/crux/claudectl/internal/session"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -146,15 +149,29 @@ func enrichHit(h *search.Hit) {
 	}
 }
 
+// Column layout constants, used for both the data row and the snippet
+// hanging-indent. UUID starts at column snippetStartCol in the data row;
+// snippets wrap in the "cell" to the right of that column.
+const (
+	findProjMax      = 32
+	findSnippetStart = 29 // column where UUID starts; snippet text aligns here
+	findMinWrapWidth = 20 // if terminal narrower than this past snippetStart, don't wrap
+)
+
 func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, brief, color bool, confident, guessed map[string]bool) {
-	const (
-		projMax = 32
-	)
+	// Terminal width: detect if stdout is a TTY. For non-TTYs (pipe,
+	// redirect), skip wrapping so downstream tools get stable lines.
+	termWidth := 0
+	if fi, err := os.Stdout.Stat(); err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
+		if cols, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil {
+			termWidth = cols
+		}
+	}
 
 	// Column widths picked so headers align with data rows. Leading
 	// gutter is one char for the active marker.
 	fmt.Fprintf(w, "   %-16s  %6s  %-36s  %-*s  %s\n",
-		"MTIME", "M", "UUID", projMax, "PROJECT", "TITLE")
+		"MTIME", "M", "UUID", findProjMax, "PROJECT", "TITLE")
 
 	var hl *regexp.Regexp
 	if color {
@@ -182,7 +199,7 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 			h.MTime.Format("2006-01-02 15:04"),
 			h.MatchCount,
 			h.UUID,
-			projMax, truncate(shortProject(h.ProjectDir), projMax),
+			findProjMax, truncate(shortProject(h.ProjectDir), findProjMax),
 			title)
 		if brief {
 			continue
@@ -192,15 +209,70 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 			if hl != nil {
 				text = hl.ReplaceAllStringFunc(text, highlightMatch)
 			}
-			// Prefix with a vertical bar at the left margin to tie
-			// snippets visually to their session; role padded to the
-			// width of "assistant" (9 chars) so snippet text aligns.
-			fmt.Fprintf(w, "│  %-9s  %s\n", s.Role, text)
+			// Snippet text goes into the UUID-column cell. Role is
+			// deliberately omitted for now (placement TBD) — the role
+			// field on each Snippet remains available on Hit.Snippets
+			// for a later layout change.
+			lines := wrapSnippet(text, findSnippetStart, termWidth)
+			for _, line := range lines {
+				fmt.Fprintf(w, "%*s%s\n", findSnippetStart, "", line)
+			}
 		}
-		// Blank line separates sessions when snippets are shown — gives
-		// the eye a clear boundary between hits.
+		// Blank line separates sessions when snippets are shown.
 		fmt.Fprintln(w)
 	}
+}
+
+// wrapSnippet breaks text into lines that each fit in the terminal
+// starting at column startCol, so continuation lines align with the
+// cell. Returns a single-element slice when wrapping isn't warranted
+// (termWidth == 0 for non-TTY, or available width is pathologically
+// narrow). Word-boundary wrap; a word longer than the available width
+// is emitted on its own line and allowed to overflow / wrap naturally.
+func wrapSnippet(text string, startCol, termWidth int) []string {
+	if termWidth == 0 {
+		return []string{text}
+	}
+	avail := termWidth - startCol
+	if avail < findMinWrapWidth {
+		return []string{text}
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{text}
+	}
+	var lines []string
+	var curLine string
+	var curWidth int
+	for _, word := range words {
+		ww := visualWidth(word)
+		if curLine == "" {
+			curLine = word
+			curWidth = ww
+			continue
+		}
+		// +1 for the space separator
+		if curWidth+1+ww > avail {
+			lines = append(lines, curLine)
+			curLine = word
+			curWidth = ww
+		} else {
+			curLine += " " + word
+			curWidth += 1 + ww
+		}
+	}
+	if curLine != "" {
+		lines = append(lines, curLine)
+	}
+	return lines
+}
+
+// visualWidth returns the display width of s in cells, ignoring ANSI
+// SGR escape sequences (which contribute 0 to display width).
+var ansiStripRE = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func visualWidth(s string) int {
+	return utf8.RuneCountInString(ansiStripRE.ReplaceAllString(s, ""))
 }
 
 func highlightMatch(m string) string {
