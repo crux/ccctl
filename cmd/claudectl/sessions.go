@@ -180,9 +180,10 @@ func runSessions(cmd *cobra.Command, args []string) error {
 				suffix = "  (" + st + ")"
 			}
 		}
-		// %4s right-aligns short values (e.g. "15M" → " 15M") so the
-		// numeric portion of the SIZE column stacks visually.
-		fmt.Fprintf(w, "%s\t%s\t%4s\t%s\t%s%s\n",
+		// %5s right-aligns short values (e.g. "15 M" → " 15 M") so the
+		// numeric portion of the SIZE column stacks visually. Width 5
+		// fits the maximum: "199 M", "4.7 M", "1.5 G", "999 B".
+		fmt.Fprintf(w, "%s\t%s\t%5s\t%s\t%s%s\n",
 			marker,
 			r.MTime.Format("2006-01-02 15:04"),
 			humanBytes(r.Size),
