@@ -338,3 +338,33 @@ func humanBytes(n int64) string {
 	}
 	return fmt.Sprintf("%.1f %s", v, suffix)
 }
+
+// humanBytesCell is a fixed-7-char-wide, decimal-aligned variant of
+// humanBytes for use in table columns. Each value takes the shape
+// "III DU" where I is an integer digit (right-padded to width 3),
+// D is the decimal digit (blanked when the value is an integer, so
+// the "." column stays aligned), and U is the unit letter:
+//
+//   "999   B"    "4.7 M"  (within "  4.7 M")
+//   "999   M"    " 15   M"
+//
+// The decimal point always sits at column 3, the unit at column 6.
+func humanBytesCell(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%3d   B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	v := float64(n) / float64(div)
+	suffix := string("KMGTPE"[exp])
+	if v >= 10 {
+		return fmt.Sprintf("%3.0f   %s", v, suffix)
+	}
+	// %5.1f pads a value like 4.7 to "  4.7" so the "." lands at col 3
+	// and the unit stays at col 6, aligned with the integer branch.
+	return fmt.Sprintf("%5.1f %s", v, suffix)
+}
