@@ -38,7 +38,11 @@ func runPs(cmd *cobra.Command, args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "PID\tDIR\tUUID\tTITLE")
+	// The leading space on " UUID" keeps column alignment: every row's
+	// UUID cell has a 1-char prefix (either '~' for a newest-in-project-dir
+	// guess or ' ' when the UUID was resolved authoritatively), so the UUID
+	// bodies start at the same column either way.
+	fmt.Fprintln(w, "PID\tVERSION\tDIR\t UUID\tTITLE")
 	for _, p := range procs {
 		title := "(no title)"
 		if p.SessionFile != "" {
@@ -46,11 +50,16 @@ func runPs(cmd *cobra.Command, args []string) error {
 				title = meta.Display()
 			}
 		}
-		uuid := p.UUID
-		if uuid == "" {
-			uuid = "-"
+		var uuid string
+		switch {
+		case p.UUID == "":
+			uuid = " -"
+		case p.GuessedUUID:
+			uuid = "~" + p.UUID
+		default:
+			uuid = " " + p.UUID
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\n", p.PID, shortDir(p.Cwd), uuid, title)
+		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", p.PID, p.Command, shortDir(p.Cwd), uuid, title)
 	}
 	return w.Flush()
 }

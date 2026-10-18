@@ -18,10 +18,14 @@ import (
 // Info describes one running claude process and the session it has open.
 type Info struct {
 	PID         int
-	Command     string // basename of the process binary (comm field)
+	Command     string // runtime process title (lsof c field); Node processes
+	                   // set this to the Claude Code version, e.g. "2.1.300"
 	Cwd         string // process working directory (absolute)
 	UUID        string // session UUID the process has open; "" if unknown
 	SessionFile string // absolute path to the .jsonl; "" if unknown
+	GuessedUUID bool   // true when UUID came from the newest-in-project-dir
+	                   // fallback (tier 3); may be wrong if the project has
+	                   // multiple active sessions
 }
 
 // ListClaudeProcesses returns one entry per running `claude` process.
@@ -32,12 +36,12 @@ type Info struct {
 //  2. The .jsonl file the process has open (lsof) — authoritative
 //  3. Newest .jsonl in the project directory for cwd (last-resort guess)
 func ListClaudeProcesses() ([]Info, error) {
-	pids, cmds, err := listClaudePIDs()
+	pids, comms, err := listClaudePIDs()
 	if err != nil || len(pids) == 0 {
 		return nil, err
 	}
 
-	cwds, err := processCwds(pids)
+	cwds, cmds, err := processDetails(pids)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +56,11 @@ func ListClaudeProcesses() ([]Info, error) {
 
 	out := make([]Info, 0, len(pids))
 	for _, pid := range pids {
-		info := Info{PID: pid, Command: cmds[pid], Cwd: cwds[pid], UUID: resume[pid]}
+		command := cmds[pid]
+		if command == "" {
+			command = comms[pid] // fallback if lsof didn't surface the title
+		}
+		info := Info{PID: pid, Command: command, Cwd: cwds[pid], UUID: resume[pid]}
 
 		switch {
 		case info.UUID != "":
@@ -63,6 +71,7 @@ func ListClaudeProcesses() ([]Info, error) {
 		case info.Cwd != "":
 			if f, uuid := project.NewestSessionFile(info.Cwd); f != "" {
 				info.SessionFile, info.UUID = f, uuid
+				info.GuessedUUID = true
 			}
 		}
 		out = append(out, info)
@@ -99,16 +108,20 @@ func listClaudePIDs() ([]int, map[int]string, error) {
 	return pids, cmds, nil
 }
 
-// processCwds returns a map of pid → cwd via one lsof call.
-func processCwds(pids []int) (map[int]string, error) {
+// processDetails returns pid → cwd AND pid → command (runtime process title)
+// via one lsof call. On macOS, Node processes set the title to a value such
+// as "2.1.300" — the Claude Code version — which is more useful for display
+// than the comm field ("claude").
+func processDetails(pids []int) (cwds, cmds map[int]string, err error) {
 	if len(pids) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
-	raw, err := runLsof("-p", joinInts(pids, ","), "-a", "-d", "cwd", "-Fn")
+	raw, err := runLsof("-p", joinInts(pids, ","), "-a", "-d", "cwd", "-Fcn")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := map[int]string{}
+	cwds = map[int]string{}
+	cmds = map[int]string{}
 	var cur int
 	for _, line := range strings.Split(string(raw), "\n") {
 		if line == "" {
@@ -117,13 +130,17 @@ func processCwds(pids []int) (map[int]string, error) {
 		switch line[0] {
 		case 'p':
 			cur, _ = strconv.Atoi(line[1:])
+		case 'c':
+			if cur != 0 {
+				cmds[cur] = line[1:]
+			}
 		case 'n':
 			if cur != 0 {
-				out[cur] = line[1:]
+				cwds[cur] = line[1:]
 			}
 		}
 	}
-	return out, nil
+	return cwds, cmds, nil
 }
 
 var resumeArgRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -220,47 +237,51 @@ func IsFileOpen(path string) bool {
 	return exec.Command("lsof", path).Run() == nil
 }
 
-// ActiveUUIDs returns the set of session UUIDs currently open by any
-// running claude process. Uses the same 3-tier resolution as
-// ListClaudeProcesses (--resume arg → open .jsonl via lsof → newest
-// .jsonl in the process's project dir) because any one tier alone misses
-// common cases: processes launched with `claude -c` or bare `claude` have
-// no --resume, and Claude Code opens-writes-closes its .jsonl so lsof
-// usually doesn't see it either.
-func ActiveUUIDs() (map[string]bool, error) {
+// ActiveUUIDs returns UUID sets of sessions currently open by any running
+// claude process, split by resolution confidence. `confident` holds UUIDs
+// resolved via --resume arg or lsof-visible open .jsonl (authoritative).
+// `guessed` holds UUIDs that fell back to "newest .jsonl in the process's
+// project dir" — the right UUID when a project only has one active
+// session, potentially wrong when it has several.
+//
+// Processes launched with `claude -c` or bare `claude` have no --resume,
+// and Claude Code opens-writes-closes its .jsonl so lsof usually doesn't
+// see it either — hence the fallback tier is load-bearing in practice.
+func ActiveUUIDs() (confident, guessed map[string]bool, err error) {
 	pids, _, err := listClaudePIDs()
 	if err != nil || len(pids) == 0 {
-		return nil, err
+		return nil, nil, err
 	}
 	resume, err := resumeUUIDs(pids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	openJSONLs, err := openClaudeJSONLs(pids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	cwds, err := processCwds(pids)
+	cwds, _, err := processDetails(pids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	out := make(map[string]bool, len(pids))
+	confident = make(map[string]bool, len(pids))
+	guessed = make(map[string]bool, len(pids))
 	for _, pid := range pids {
 		if u := resume[pid]; u != "" {
-			out[u] = true
+			confident[u] = true
 			continue
 		}
 		if path := openJSONLs[pid]; path != "" {
-			out[strings.TrimSuffix(filepath.Base(path), ".jsonl")] = true
+			confident[strings.TrimSuffix(filepath.Base(path), ".jsonl")] = true
 			continue
 		}
 		if cwd := cwds[pid]; cwd != "" {
 			if _, uuid := project.NewestSessionFile(cwd); uuid != "" {
-				out[uuid] = true
+				guessed[uuid] = true
 			}
 		}
 	}
-	return out, nil
+	return confident, guessed, nil
 }
 
 func joinInts(xs []int, sep string) string {

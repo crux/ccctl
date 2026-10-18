@@ -120,10 +120,14 @@ func runSessions(cmd *cobra.Command, args []string) error {
 	// Fetch active-session UUIDs in parallel with the meta reads — the
 	// ps/lsof calls underneath take roughly as long as all the file I/O,
 	// so overlapping them keeps total latency close to max(both).
-	activeChan := make(chan map[string]bool, 1)
+	type activeInfo struct {
+		confident map[string]bool
+		guessed   map[string]bool
+	}
+	activeChan := make(chan activeInfo, 1)
 	go func() {
-		set, _ := proc.ActiveUUIDs()
-		activeChan <- set
+		c, g, _ := proc.ActiveUUIDs()
+		activeChan <- activeInfo{c, g}
 	}()
 
 	// Fan out meta reads with bounded concurrency.
@@ -152,16 +156,23 @@ func runSessions(cmd *cobra.Command, args []string) error {
 
 	fmt.Printf("Claude sessions for: %s\n\n", realDir)
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
-	fmt.Fprintln(w, "MTIME\tUUID\tTITLE")
+	// Leading 1-char gutter: '*' confident-active, '~' guessed-active,
+	// ' ' otherwise. Fixed left-margin position makes it scannable.
+	fmt.Fprintln(w, " \tMTIME\tUUID\tTITLE")
 	for _, r := range rows {
-		var suffix string
+		marker := " "
 		switch {
-		case r.Archived:
-			suffix = "  [archived]"
-		case active[r.UUID]:
-			suffix = "  [active]"
+		case active.confident[r.UUID]:
+			marker = "*"
+		case active.guessed[r.UUID]:
+			marker = "~"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s%s\n",
+		suffix := ""
+		if r.Archived {
+			suffix = "  [archived]"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s%s\n",
+			marker,
 			r.MTime.Format("2006-01-02 15:04"),
 			r.UUID,
 			r.Meta.Display(),
