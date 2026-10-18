@@ -313,17 +313,28 @@ func titleForFile(path string) string {
 	return "(no title)"
 }
 
-// humanBytes renders a byte count as a human-readable string (B, KB,
-// MB, GB, …) with one decimal place for anything above KB.
+// humanBytes renders a byte count in du -h style: a single-letter
+// suffix (K/M/G/…), no space, and one decimal place for values below
+// 10 of that unit. Base-1024.
+//
+//   999 B -> "999B"
+//   4.7 MB -> "4.7M"
+//   15 MB  -> "15M"
+//   199 MB -> "199M"
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
-		return fmt.Sprintf("%d B", n)
+		return fmt.Sprintf("%dB", n)
 	}
 	div, exp := int64(unit), 0
 	for v := n / unit; v >= unit; v /= unit {
 		div *= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+	v := float64(n) / float64(div)
+	suffix := string("KMGTPE"[exp])
+	if v >= 10 {
+		return fmt.Sprintf("%.0f%s", v, suffix)
+	}
+	return fmt.Sprintf("%.1f%s", v, suffix)
 }
