@@ -44,6 +44,7 @@ var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 
 type sessionRow struct {
 	MTime    time.Time
+	Size     int64
 	UUID     string
 	Meta     session.Meta
 	Archived bool
@@ -78,6 +79,7 @@ func runSessions(cmd *cobra.Command, args []string) error {
 		path     string
 		uuid     string
 		mtime    time.Time
+		size     int64
 		archived bool
 	}
 	var pendings []pending
@@ -108,6 +110,7 @@ func runSessions(cmd *cobra.Command, args []string) error {
 			path:     filepath.Join(projectDir, name),
 			uuid:     uuid,
 			mtime:    info.ModTime(),
+			size:     info.Size(),
 			archived: archived,
 		})
 	}
@@ -142,7 +145,7 @@ func runSessions(cmd *cobra.Command, args []string) error {
 			} else {
 				meta, _ = session.ReadMeta(p.path)
 			}
-			rows[i] = sessionRow{MTime: p.mtime, UUID: p.uuid, Meta: meta, Archived: p.archived}
+			rows[i] = sessionRow{MTime: p.mtime, Size: p.size, UUID: p.uuid, Meta: meta, Archived: p.archived}
 		}(i, p)
 	}
 	wg.Wait()
@@ -154,7 +157,10 @@ func runSessions(cmd *cobra.Command, args []string) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	// Leading 1-char gutter: '*' confident-active, '~' guessed-active,
 	// ' ' otherwise. Fixed left-margin position makes it scannable.
-	fmt.Fprintln(w, " \tMTIME\tUUID\tTITLE")
+	// SIZE is the on-disk .jsonl (or .zip) size — a cheap, free-from-
+	// directory-walk proxy for session weight. When the FTS index lands
+	// it can be replaced or complemented with precomputed message counts.
+	fmt.Fprintln(w, " \tMTIME\tSIZE\tUUID\tTITLE")
 	for _, r := range rows {
 		marker := " "
 		switch {
@@ -174,9 +180,10 @@ func runSessions(cmd *cobra.Command, args []string) error {
 				suffix = "  (" + st + ")"
 			}
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s%s\n",
 			marker,
 			r.MTime.Format("2006-01-02 15:04"),
+			humanBytes(r.Size),
 			r.UUID,
 			r.Meta.Display(),
 			suffix)
