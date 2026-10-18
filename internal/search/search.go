@@ -314,9 +314,14 @@ func appendRing(ring []Snippet, s Snippet, capN int) []Snippet {
 
 // makeSnippet builds a display-ready context string around a match.
 // Collapses runs of whitespace to single spaces and ellipsises both
-// sides if content extended beyond the window. Advances byte offsets
-// to the nearest rune boundary so multi-byte runes aren't cut in half
-// (which would otherwise produce U+FFFD replacement chars).
+// sides if content extended beyond the window. Snippet boundaries are
+// adjusted to:
+//   1. the nearest WORD boundary (whitespace), within a 15-char budget,
+//      so we don't cut mid-word;
+//   2. the nearest UTF-8 rune boundary, so multi-byte runes aren't
+//      sliced in half (which would otherwise produce U+FFFD chars).
+// Word alignment is best-effort — if no whitespace is found within the
+// budget, we fall back to the raw cut.
 func makeSnippet(text string, matchStart, matchEnd int) string {
 	start := matchStart - snippetBefore
 	end := matchEnd + snippetAfter
@@ -328,13 +333,13 @@ func makeSnippet(text string, matchStart, matchEnd int) string {
 	if end > len(text) {
 		end = len(text)
 	}
-	// Advance start forward to the next rune boundary when inside a
-	// multi-byte rune (continuation byte).
+	start = advanceToWordStart(text, start)
+	end = retreatToWordEnd(text, end)
+	// UTF-8 safety on top of word alignment: if we somehow still land
+	// inside a multi-byte rune, nudge to a rune boundary.
 	for start < len(text) && !utf8.RuneStart(text[start]) {
 		start++
 	}
-	// Trim end backward to the previous rune boundary so text[start:end]
-	// ends cleanly between runes.
 	for end > start && end < len(text) && !utf8.RuneStart(text[end]) {
 		end--
 	}
@@ -348,6 +353,63 @@ func makeSnippet(text string, matchStart, matchEnd int) string {
 		ctx = ctx + "…"
 	}
 	return ctx
+}
+
+const wordBoundaryBudget = 15
+
+// advanceToWordStart returns the index of the next character that
+// begins a word at or after `start`, searching no more than
+// wordBoundaryBudget bytes. If `start` already follows whitespace it
+// is unchanged. If no whitespace is found within budget, returns the
+// original start (fallback to raw cut).
+func advanceToWordStart(text string, start int) int {
+	if start <= 0 || start >= len(text) {
+		return start
+	}
+	if isWhitespaceByte(text[start-1]) {
+		// Skip any run of whitespace to the first non-ws byte.
+		for start < len(text) && isWhitespaceByte(text[start]) {
+			start++
+		}
+		return start
+	}
+	for i := 0; i < wordBoundaryBudget && start+i < len(text); i++ {
+		if isWhitespaceByte(text[start+i]) {
+			j := start + i + 1
+			for j < len(text) && isWhitespaceByte(text[j]) {
+				j++
+			}
+			return j
+		}
+	}
+	return start
+}
+
+// retreatToWordEnd returns an index at or before `end` such that
+// text[:end] ends on a word boundary (whitespace follows, or end of
+// string). Searches no more than wordBoundaryBudget bytes; falls back
+// to the raw end if no whitespace found in that window.
+func retreatToWordEnd(text string, end int) int {
+	if end <= 0 || end >= len(text) {
+		return end
+	}
+	if isWhitespaceByte(text[end]) {
+		// Trim any trailing whitespace in text[:end].
+		for end > 0 && isWhitespaceByte(text[end-1]) {
+			end--
+		}
+		return end
+	}
+	for i := 0; i < wordBoundaryBudget && end-i-1 > 0; i++ {
+		if isWhitespaceByte(text[end-i-1]) {
+			return end - i - 1
+		}
+	}
+	return end
+}
+
+func isWhitespaceByte(b byte) bool {
+	return b == ' ' || b == '\t' || b == '\n' || b == '\r'
 }
 
 var whitespaceRE = regexp.MustCompile(`\s+`)

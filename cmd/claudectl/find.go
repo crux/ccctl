@@ -166,9 +166,10 @@ func enrichHit(h *search.Hit) {
 // to the text column (23).
 const (
 	findProjMax      = 32
-	findSnippetStart = 23 // snippet TEXT column (role char lives at start-2)
-	findSnippetEnd   = 99 // cell boundary — just before TITLE
-	findMinWrapWidth = 20 // too-narrow fallback: emit single line, let terminal wrap
+	findSnippetStart = 23  // snippet TEXT column (role char lives at start-2)
+	findSnippetEnd   = 99  // snippet cell boundary — just before TITLE
+	findTitleStart   = 101 // where TITLE begins; wrap continuations indent here
+	findMinWrapWidth = 20  // too-narrow fallback: emit single line, let terminal wrap
 )
 
 func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, brief, color bool, active proc.ActiveSet) {
@@ -208,19 +209,28 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 			title = "(no title)"
 		}
 		// Append (busy) when the session is actively processing.
-		titleSuffix := ""
 		if active.Confident[h.UUID] {
 			if st := active.Status[h.UUID]; st != "" && st != "idle" {
-				titleSuffix = "  (" + st + ")"
+				title = title + "  (" + st + ")"
 			}
 		}
-		fmt.Fprintf(w, "%s  %-16s  %6d  %-36s  %-*s  %s%s\n",
+		// Wrap the title in its column: first line prints inline with
+		// the data row, continuations indent to findTitleStart.
+		// endCol=0 means "no cell boundary; use terminal width only".
+		titleLines := wrapSnippet(title, findTitleStart, 0, termWidth)
+		if len(titleLines) == 0 {
+			titleLines = []string{title}
+		}
+		fmt.Fprintf(w, "%s  %-16s  %6d  %-36s  %-*s  %s\n",
 			marker,
 			h.MTime.Format("2006-01-02 15:04"),
 			h.MatchCount,
 			h.UUID,
 			findProjMax, truncate(shortProject(h.ProjectDir), findProjMax),
-			title, titleSuffix)
+			titleLines[0])
+		for i := 1; i < len(titleLines); i++ {
+			fmt.Fprintf(w, "%*s%s\n", findTitleStart, "", titleLines[i])
+		}
 		if brief {
 			continue
 		}
@@ -258,7 +268,13 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 // cell). Word-boundary wrap; a word longer than available width is
 // emitted on its own line and allowed to overflow.
 func wrapSnippet(text string, startCol, endCol, termWidth int) []string {
-	avail := endCol - startCol
+	// endCol == 0 means "no fixed cell boundary; constrain only by
+	// terminal width if known". Used for the TITLE column, which
+	// extends to the terminal edge.
+	avail := 1 << 20
+	if endCol > startCol {
+		avail = endCol - startCol
+	}
 	if termWidth > 0 {
 		if w := termWidth - startCol; w < avail {
 			avail = w
