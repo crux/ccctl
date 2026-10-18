@@ -23,6 +23,7 @@ var (
 	findLastN         int
 	findUUID          string
 	findColor         string
+	findTools         bool
 )
 
 var findCmd = &cobra.Command{
@@ -64,6 +65,7 @@ func init() {
 	findCmd.Flags().IntVar(&findLastN, "last", 1, "show last N snippets per session, chronological")
 	findCmd.Flags().StringVar(&findUUID, "uuid", "", "scope to one session (UUID prefix is enough)")
 	findCmd.Flags().StringVar(&findColor, "color", "auto", "highlight matches in snippets: always|never|auto")
+	findCmd.Flags().BoolVar(&findTools, "tools", false, "also search tool_use payloads (not yet implemented)")
 }
 
 func runFind(cmd *cobra.Command, args []string) error {
@@ -78,6 +80,9 @@ func runFind(cmd *cobra.Command, args []string) error {
 	}
 	if findHere && dir != "" {
 		return fmt.Errorf("--here and a positional <dir> are mutually exclusive")
+	}
+	if findTools {
+		return fmt.Errorf("--tools is not yet implemented; find currently matches user/assistant text only")
 	}
 
 	opts := search.Opts{
@@ -122,9 +127,9 @@ func runFind(cmd *cobra.Command, args []string) error {
 		enrichHit(&hits[i])
 	}
 
-	confident, guessed, _ := proc.ActiveUUIDs()
+	active, _ := proc.ActiveUUIDs()
 	useColor := resolveColor(findColor)
-	printHits(os.Stdout, hits, pattern, findCaseSensitive, findBrief, useColor, confident, guessed)
+	printHits(os.Stdout, hits, pattern, findCaseSensitive, findBrief, useColor, active)
 	return nil
 }
 
@@ -149,16 +154,19 @@ func enrichHit(h *search.Hit) {
 	}
 }
 
-// Column layout constants, used for both the data row and the snippet
-// hanging-indent. UUID starts at column snippetStartCol in the data row;
-// snippets wrap in the "cell" to the right of that column.
+// Column layout constants. In the data row, UUID starts at
+// findSnippetStart and PROJECT ends at findSnippetEnd. Snippets live in
+// the UUID+PROJECT "cell" — anchored at findSnippetStart, wrapping at
+// findSnippetEnd (or terminal edge, whichever is narrower) so they
+// never bleed into the TITLE column.
 const (
 	findProjMax      = 32
 	findSnippetStart = 29 // column where UUID starts; snippet text aligns here
-	findMinWrapWidth = 20 // if terminal narrower than this past snippetStart, don't wrap
+	findSnippetEnd   = 99 // = findSnippetStart + 36 (UUID) + 2 (pad) + 32 (PROJECT)
+	findMinWrapWidth = 20 // too-narrow fallback: emit single line, let terminal wrap
 )
 
-func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, brief, color bool, confident, guessed map[string]bool) {
+func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, brief, color bool, active proc.ActiveSet) {
 	// Terminal width: detect if stdout is a TTY. For non-TTYs (pipe,
 	// redirect), skip wrapping so downstream tools get stable lines.
 	termWidth := 0
@@ -185,22 +193,29 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 	for _, h := range hits {
 		marker := " "
 		switch {
-		case confident[h.UUID]:
+		case active.Confident[h.UUID]:
 			marker = "*"
-		case guessed[h.UUID]:
+		case active.Guessed[h.UUID]:
 			marker = "~"
 		}
 		title := h.Title
 		if title == "" {
 			title = "(no title)"
 		}
-		fmt.Fprintf(w, "%s  %-16s  %6d  %-36s  %-*s  %s\n",
+		// Append (busy) when the session is actively processing.
+		titleSuffix := ""
+		if active.Confident[h.UUID] {
+			if st := active.Status[h.UUID]; st != "" && st != "idle" {
+				titleSuffix = "  (" + st + ")"
+			}
+		}
+		fmt.Fprintf(w, "%s  %-16s  %6d  %-36s  %-*s  %s%s\n",
 			marker,
 			h.MTime.Format("2006-01-02 15:04"),
 			h.MatchCount,
 			h.UUID,
 			findProjMax, truncate(shortProject(h.ProjectDir), findProjMax),
-			title)
+			title, titleSuffix)
 		if brief {
 			continue
 		}
@@ -209,13 +224,22 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 			if hl != nil {
 				text = hl.ReplaceAllStringFunc(text, highlightMatch)
 			}
-			// Snippet text goes into the UUID-column cell. Role is
-			// deliberately omitted for now (placement TBD) — the role
-			// field on each Snippet remains available on Hit.Snippets
-			// for a later layout change.
-			lines := wrapSnippet(text, findSnippetStart, termWidth)
-			for _, line := range lines {
-				fmt.Fprintf(w, "%*s%s\n", findSnippetStart, "", line)
+			// Snippet lives in the UUID+PROJECT cell. First line gets
+			// a 2-char role prefix (letter + space) at col
+			// findSnippetStart-2 so the actual snippet still starts at
+			// findSnippetStart; continuation lines indent to that same
+			// column with no prefix.
+			lines := wrapSnippet(text, findSnippetStart, findSnippetEnd, termWidth)
+			rolePrefix := "? "
+			if len(s.Role) > 0 {
+				rolePrefix = string(s.Role[0]) + " "
+			}
+			for i, line := range lines {
+				if i == 0 {
+					fmt.Fprintf(w, "%*s%s%s\n", findSnippetStart-2, "", rolePrefix, line)
+				} else {
+					fmt.Fprintf(w, "%*s%s\n", findSnippetStart, "", line)
+				}
 			}
 		}
 		// Blank line separates sessions when snippets are shown.
@@ -223,17 +247,18 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 	}
 }
 
-// wrapSnippet breaks text into lines that each fit in the terminal
-// starting at column startCol, so continuation lines align with the
-// cell. Returns a single-element slice when wrapping isn't warranted
-// (termWidth == 0 for non-TTY, or available width is pathologically
-// narrow). Word-boundary wrap; a word longer than the available width
-// is emitted on its own line and allowed to overflow / wrap naturally.
-func wrapSnippet(text string, startCol, termWidth int) []string {
-	if termWidth == 0 {
-		return []string{text}
+// wrapSnippet breaks text into lines that each fit in the UUID+PROJECT
+// "cell": available width = min(endCol - startCol, termWidth - startCol).
+// Returns a single-element slice when wrapping is pathological (narrow
+// cell). Word-boundary wrap; a word longer than available width is
+// emitted on its own line and allowed to overflow.
+func wrapSnippet(text string, startCol, endCol, termWidth int) []string {
+	avail := endCol - startCol
+	if termWidth > 0 {
+		if w := termWidth - startCol; w < avail {
+			avail = w
+		}
 	}
-	avail := termWidth - startCol
 	if avail < findMinWrapWidth {
 		return []string{text}
 	}
@@ -251,7 +276,6 @@ func wrapSnippet(text string, startCol, termWidth int) []string {
 			curWidth = ww
 			continue
 		}
-		// +1 for the space separator
 		if curWidth+1+ww > avail {
 			lines = append(lines, curLine)
 			curLine = word

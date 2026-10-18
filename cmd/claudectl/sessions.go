@@ -120,14 +120,10 @@ func runSessions(cmd *cobra.Command, args []string) error {
 	// Fetch active-session UUIDs in parallel with the meta reads — the
 	// ps/lsof calls underneath take roughly as long as all the file I/O,
 	// so overlapping them keeps total latency close to max(both).
-	type activeInfo struct {
-		confident map[string]bool
-		guessed   map[string]bool
-	}
-	activeChan := make(chan activeInfo, 1)
+	activeChan := make(chan proc.ActiveSet, 1)
 	go func() {
-		c, g, _ := proc.ActiveUUIDs()
-		activeChan <- activeInfo{c, g}
+		set, _ := proc.ActiveUUIDs()
+		activeChan <- set
 	}()
 
 	// Fan out meta reads with bounded concurrency.
@@ -162,14 +158,21 @@ func runSessions(cmd *cobra.Command, args []string) error {
 	for _, r := range rows {
 		marker := " "
 		switch {
-		case active.confident[r.UUID]:
+		case active.Confident[r.UUID]:
 			marker = "*"
-		case active.guessed[r.UUID]:
+		case active.Guessed[r.UUID]:
 			marker = "~"
 		}
 		suffix := ""
-		if r.Archived {
+		switch {
+		case r.Archived:
 			suffix = "  [archived]"
+		case active.Confident[r.UUID]:
+			// For live sessions, append (status) when non-idle. Idle
+			// is the common state and left unmarked.
+			if st := active.Status[r.UUID]; st != "" && st != "idle" {
+				suffix = "  (" + st + ")"
+			}
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s%s\n",
 			marker,

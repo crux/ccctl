@@ -357,52 +357,72 @@ func IsFileOpen(path string) bool {
 	return exec.Command("lsof", path).Run() == nil
 }
 
-// ActiveUUIDs returns UUID sets of sessions currently open by any
-// running claude process, split by resolution confidence. For modern
-// claude builds the authoritative signal is ~/.claude/sessions/<pid>.json
-// — those UUIDs land in `confident`. For older builds we fall back to
-// --resume arg → newest .jsonl in cwd; UUIDs from the newest-in-dir
-// guess land in `guessed`.
-func ActiveUUIDs() (confident, guessed map[string]bool, err error) {
+// ActiveSet describes sessions currently open by any running claude
+// process, with resolution confidence and per-session status.
+//
+//   Confident — UUIDs resolved via PIDSession (authoritative) or
+//               --resume arg (legacy)
+//   Guessed   — UUIDs from the newest-in-project-dir fallback;
+//               right when one active session per project, maybe wrong
+//               with several
+//   Status    — "idle" / "busy" / "" (unknown; set only when the
+//               PIDSession path resolved the UUID)
+type ActiveSet struct {
+	Confident map[string]bool
+	Guessed   map[string]bool
+	Status    map[string]string
+}
+
+// ActiveUUIDs enumerates currently-open sessions across all running
+// claude processes. For modern claude, authoritative via
+// ~/.claude/sessions/<pid>.json; legacy fallback uses --resume arg +
+// newest-in-dir guess.
+func ActiveUUIDs() (ActiveSet, error) {
+	out := ActiveSet{
+		Confident: map[string]bool{},
+		Guessed:   map[string]bool{},
+		Status:    map[string]string{},
+	}
 	pids, _, err := listClaudePIDs()
 	if err != nil || len(pids) == 0 {
-		return nil, nil, err
+		return out, err
 	}
-	confident = make(map[string]bool, len(pids))
-	guessed = make(map[string]bool, len(pids))
 
 	var fallbackPIDs []int
 	for _, pid := range pids {
 		if ps, err := ReadPIDSession(pid); err == nil && ps.SessionID != "" {
-			confident[ps.SessionID] = true
+			out.Confident[ps.SessionID] = true
+			if ps.Status != "" {
+				out.Status[ps.SessionID] = ps.Status
+			}
 			continue
 		}
 		fallbackPIDs = append(fallbackPIDs, pid)
 	}
 	if len(fallbackPIDs) == 0 {
-		return confident, guessed, nil
+		return out, nil
 	}
 
 	resume, err := resumeUUIDs(fallbackPIDs)
 	if err != nil {
-		return confident, guessed, err
+		return out, err
 	}
 	cwds, _, err := processDetails(fallbackPIDs)
 	if err != nil {
-		return confident, guessed, err
+		return out, err
 	}
 	for _, pid := range fallbackPIDs {
 		if u := resume[pid]; u != "" {
-			confident[u] = true
+			out.Confident[u] = true
 			continue
 		}
 		if cwd := cwds[pid]; cwd != "" {
 			if _, uuid := project.NewestSessionFile(cwd); uuid != "" {
-				guessed[uuid] = true
+				out.Guessed[uuid] = true
 			}
 		}
 	}
-	return confident, guessed, nil
+	return out, nil
 }
 
 func joinInts(xs []int, sep string) string {
