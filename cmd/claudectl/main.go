@@ -56,7 +56,16 @@ func init() {
 	rootCmd.AddCommand(takeoverCmd)
 	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(statusCmd)
-	// Silence cobra's default error echo — main prints via Fprintln above.
+	// Silence cobra's own error echo — main.go prints via Fprintln above
+	// so we can prefix with "claudectl:".
 	rootCmd.SilenceErrors = true
-	rootCmd.SilenceUsage = true
+	// Flip SilenceUsage once args validation has passed, so arg-
+	// validation errors still auto-print the Usage block (helps the
+	// user recover from a wrong invocation) but runtime errors from
+	// RunE don't drag the Usage block into the output as noise.
+	// PersistentPreRun fires AFTER cobra validates args and BEFORE
+	// Run/RunE, which is exactly the hinge we want.
+	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
+		cmd.SilenceUsage = true
+	}
 }
