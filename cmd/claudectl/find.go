@@ -185,7 +185,7 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 	fmt.Fprintf(w, "   %-16s  %6s  %-*s  %s\n",
 		"MTIME", "M",
 		findProjMax, "PROJECT",
-		"TITLE  (UUID)")
+		"TITLE · UUID")
 
 	var hl *regexp.Regexp
 	if color {
@@ -213,9 +213,9 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 				title = title + "  (" + st + ")"
 			}
 		}
-		// TITLE+UUID fused as "title (uuid)" and wraps freely at the
+		// TITLE+UUID fused as "title · uuid" and wraps freely at the
 		// title column, bounded only by terminal width.
-		fullTitle := title + "  (" + h.UUID + ")"
+		fullTitle := title + " · " + h.UUID
 		titleLines := wrapSnippet(fullTitle, findTitleStart, 0, termWidth)
 		if len(titleLines) == 0 {
 			titleLines = []string{fullTitle}
