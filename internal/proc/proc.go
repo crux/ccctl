@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/crux/claudectl/internal/project"
 )
@@ -49,6 +50,102 @@ func ReadPIDSession(pid int) (*PIDSession, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 	return &ps, nil
+}
+
+// FindPIDBySessionID iterates ~/.claude/sessions/*.json and returns the
+// first PIDSession whose SessionID matches, filtering out records whose
+// PID is no longer running. Returns nil if no live claude process has
+// that session open.
+func FindPIDBySessionID(sessionID string) (*PIDSession, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	dir := filepath.Join(home, ".claude", "sessions")
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		pid, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".json"))
+		if err != nil {
+			continue
+		}
+		ps, err := ReadPIDSession(pid)
+		if err != nil || ps == nil || ps.SessionID != sessionID {
+			continue
+		}
+		if !isPIDRunning(pid) {
+			continue
+		}
+		return ps, nil
+	}
+	return nil, nil
+}
+
+// isPIDRunning tests whether a PID is still live. Signal 0 does not
+// deliver a signal; it just error-checks the target.
+func isPIDRunning(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+// Ancestor describes one entry in a process-ancestor chain.
+type Ancestor struct {
+	PID     int
+	PPID    int
+	Command string // full argv[0] (basename for display)
+}
+
+// PPIDAncestors returns the ancestor chain of pid, starting with pid's
+// immediate parent and walking up until a top-level process (ppid <= 1)
+// is reached. pid itself is NOT included.
+func PPIDAncestors(pid int) ([]Ancestor, error) {
+	raw, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,comm=").Output()
+	if err != nil {
+		return nil, fmt.Errorf("ps: %w", err)
+	}
+	type entry struct {
+		ppid int
+		comm string
+	}
+	byPID := make(map[int]entry, 256)
+	for _, line := range strings.Split(string(raw), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 3 {
+			continue
+		}
+		p, err := strconv.Atoi(fields[0])
+		if err != nil {
+			continue
+		}
+		pp, err := strconv.Atoi(fields[1])
+		if err != nil {
+			continue
+		}
+		byPID[p] = entry{pp, strings.Join(fields[2:], " ")}
+	}
+
+	e, ok := byPID[pid]
+	if !ok {
+		return nil, fmt.Errorf("pid %d not found in process table", pid)
+	}
+	var out []Ancestor
+	for e.ppid > 1 {
+		parent, ok := byPID[e.ppid]
+		if !ok {
+			break
+		}
+		out = append(out, Ancestor{PID: e.ppid, PPID: parent.ppid, Command: parent.comm})
+		e = parent
+	}
+	return out, nil
 }
 
 // Info describes one running claude process and the session it has open.
