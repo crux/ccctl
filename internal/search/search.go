@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Hit describes one session that matched the search pattern.
@@ -313,7 +314,9 @@ func appendRing(ring []Snippet, s Snippet, capN int) []Snippet {
 
 // makeSnippet builds a display-ready context string around a match.
 // Collapses runs of whitespace to single spaces and ellipsises both
-// sides if content extended beyond the window.
+// sides if content extended beyond the window. Advances byte offsets
+// to the nearest rune boundary so multi-byte runes aren't cut in half
+// (which would otherwise produce U+FFFD replacement chars).
 func makeSnippet(text string, matchStart, matchEnd int) string {
 	start := matchStart - snippetBefore
 	end := matchEnd + snippetAfter
@@ -324,6 +327,16 @@ func makeSnippet(text string, matchStart, matchEnd int) string {
 	}
 	if end > len(text) {
 		end = len(text)
+	}
+	// Advance start forward to the next rune boundary when inside a
+	// multi-byte rune (continuation byte).
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	// Trim end backward to the previous rune boundary so text[start:end]
+	// ends cleanly between runes.
+	for end > start && end < len(text) && !utf8.RuneStart(text[end]) {
+		end--
 	}
 	ctx := text[start:end]
 	ctx = whitespaceRE.ReplaceAllString(ctx, " ")

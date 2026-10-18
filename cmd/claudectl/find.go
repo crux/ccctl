@@ -192,9 +192,14 @@ func printHits(w *os.File, hits []search.Hit, pattern string, caseSensitive, bri
 			if hl != nil {
 				text = hl.ReplaceAllStringFunc(text, highlightMatch)
 			}
-			// Role padded to width of "assistant" (9) so content aligns.
-			fmt.Fprintf(w, "    %-9s  %s\n", s.Role, text)
+			// Prefix with a vertical bar at the left margin to tie
+			// snippets visually to their session; role padded to the
+			// width of "assistant" (9 chars) so snippet text aligns.
+			fmt.Fprintf(w, "│  %-9s  %s\n", s.Role, text)
 		}
+		// Blank line separates sessions when snippets are shown — gives
+		// the eye a clear boundary between hits.
+		fmt.Fprintln(w)
 	}
 }
 

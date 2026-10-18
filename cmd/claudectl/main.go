@@ -19,9 +19,23 @@ var rootCmd = &cobra.Command{
 	Long: `claudectl inspects and operates on Claude Code sessions stored under
 ~/.claude/projects/<encoded-project>/.
 
-Each subcommand targets one aspect: ps lists running sessions, sessions
-lists stored sessions for a project, move/archive/restore manage session
-file lifecycle.`,
+With no subcommand, prints the same overview as 'claudectl status'. Use
+'claudectl --help' or 'claudectl <subcommand> --help' for the full
+command set.`,
+	Args: cobra.NoArgs,
+	RunE: runStatusDefault,
+}
+
+// runStatusDefault runs the status command when the user invokes
+// `claudectl` with no subcommand, then prints a one-line hint pointing
+// at --help so the broader command set stays discoverable.
+func runStatusDefault(cmd *cobra.Command, args []string) error {
+	if err := runStatus(cmd, args); err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Println("Run 'claudectl --help' for the full command list.")
+	return nil
 }
 
 func main() {
