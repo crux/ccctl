@@ -1,4 +1,4 @@
-// Command claudectl is a personal toolkit for inspecting and operating on
+// Command ccctl is a personal toolkit for inspecting and operating on
 // Claude Code sessions and the local project namespaces that hold them.
 //
 // Supersedes an earlier shell implementation; the companion claude.zsh
@@ -14,33 +14,33 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "claudectl",
+	Use:   "ccctl",
 	Short: "Personal toolkit for Claude Code session management",
-	Long: `claudectl inspects and operates on Claude Code sessions stored under
+	Long: `ccctl inspects and operates on Claude Code sessions stored under
 ~/.claude/projects/<encoded-project>/.
 
-With no subcommand, prints the same overview as 'claudectl status'. Use
-'claudectl --help' or 'claudectl <subcommand> --help' for the full
+With no subcommand, prints the same overview as 'ccctl status'. Use
+'ccctl --help' or 'ccctl <subcommand> --help' for the full
 command set.`,
 	Args: cobra.NoArgs,
 	RunE: runStatusDefault,
 }
 
 // runStatusDefault runs the status command when the user invokes
-// `claudectl` with no subcommand, then prints a one-line hint pointing
+// `ccctl` with no subcommand, then prints a one-line hint pointing
 // at --help so the broader command set stays discoverable.
 func runStatusDefault(cmd *cobra.Command, args []string) error {
 	if err := runStatus(cmd, args); err != nil {
 		return err
 	}
 	fmt.Println()
-	fmt.Println("Run 'claudectl --help' for the full command list.")
+	fmt.Println("Run 'ccctl --help' for the full command list.")
 	return nil
 }
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, "claudectl:", err)
+		fmt.Fprintln(os.Stderr, "ccctl:", err)
 		os.Exit(1)
 	}
 }
@@ -57,7 +57,7 @@ func init() {
 	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(statusCmd)
 	// Silence cobra's own error echo — main.go prints via Fprintln above
-	// so we can prefix with "claudectl:".
+	// so we can prefix with "ccctl:".
 	rootCmd.SilenceErrors = true
 	// Flip SilenceUsage once args validation has passed, so arg-
 	// validation errors still auto-print the Usage block (helps the

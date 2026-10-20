@@ -15,7 +15,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/crux/claudectl/internal/project"
+	"github.com/crux/ccctl/internal/project"
 )
 
 // PIDSession is the per-PID session record Claude Code writes to

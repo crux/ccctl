@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"text/tabwriter"
 
-	"github.com/crux/claudectl/internal/proc"
-	"github.com/crux/claudectl/internal/session"
+	"github.com/crux/ccctl/internal/proc"
+	"github.com/crux/ccctl/internal/session"
 	"github.com/spf13/cobra"
 )
 

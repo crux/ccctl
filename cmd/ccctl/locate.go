@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/crux/claudectl/internal/proc"
+	"github.com/crux/ccctl/internal/proc"
 )
 
 // SessionLocation bundles everything a locator can determine about a

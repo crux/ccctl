@@ -1,5 +1,5 @@
 // Package archive implements zip create / extract / validate for
-// session archival. Used by `claudectl archive` and `claudectl restore`.
+// session archival. Used by `ccctl archive` and `ccctl restore`.
 package archive
 
 import (

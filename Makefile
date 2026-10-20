@@ -1,9 +1,9 @@
-# claudectl — Makefile dispatcher.
+# ccctl — Makefile dispatcher.
 # Thin targets; real work in Go (and scripts/ when a recipe outgrows one line).
 
 .DEFAULT_GOAL := help
 
-BINARY := claudectl
+BINARY := ccctl
 CMD    := ./cmd/$(BINARY)
 
 .PHONY: help build install test fmt vet tidy clean
@@ -11,7 +11,7 @@ CMD    := ./cmd/$(BINARY)
 help: ## list targets
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## compile to ./bin/claudectl
+build: ## compile to ./bin/ccctl
 	@mkdir -p bin
 	go build -o bin/$(BINARY) $(CMD)
 

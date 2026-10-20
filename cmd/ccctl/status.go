@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/crux/claudectl/internal/proc"
-	"github.com/crux/claudectl/internal/project"
-	"github.com/crux/claudectl/internal/session"
+	"github.com/crux/ccctl/internal/proc"
+	"github.com/crux/ccctl/internal/project"
+	"github.com/crux/ccctl/internal/session"
 	"github.com/spf13/cobra"
 )
 

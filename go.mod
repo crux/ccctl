@@ -1,4 +1,4 @@
-module github.com/crux/claudectl
+module github.com/crux/ccctl
 
 go 1.26.0
 

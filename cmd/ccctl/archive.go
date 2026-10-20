@@ -5,9 +5,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/crux/claudectl/internal/archive"
-	"github.com/crux/claudectl/internal/proc"
-	"github.com/crux/claudectl/internal/project"
+	"github.com/crux/ccctl/internal/archive"
+	"github.com/crux/ccctl/internal/proc"
+	"github.com/crux/ccctl/internal/project"
 	"github.com/spf13/cobra"
 )
 
@@ -16,8 +16,8 @@ var archiveCmd = &cobra.Command{
 	Short: "Pack a session's files into a .zip, removing the originals",
 	Long: `Pack <uuid>.jsonl (and companion <uuid>/ folder if present) into
 <uuid>.zip in the same project directory, then remove the originals.
-Claude and 'claudectl sessions' no longer see the session; use
-'claudectl restore <uuid>' to bring it back.
+Claude and 'ccctl sessions' no longer see the session; use
+'ccctl restore <uuid>' to bring it back.
 
 Refuses to archive an active session or overwrite an existing <uuid>.zip.`,
 	Args: cobra.ExactArgs(1),

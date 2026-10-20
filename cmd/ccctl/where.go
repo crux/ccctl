@@ -21,7 +21,7 @@ Prints:
   - the tmux pane coordinates, when the process runs under tmux
 
 Prose output, read-only. For action (jumping to the terminal), see
-'claudectl focus'.`,
+'ccctl focus'.`,
 	Args: cobra.ExactArgs(1),
 	RunE: runWhere,
 }

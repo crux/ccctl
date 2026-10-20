@@ -5,8 +5,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/crux/claudectl/internal/archive"
-	"github.com/crux/claudectl/internal/project"
+	"github.com/crux/ccctl/internal/archive"
+	"github.com/crux/ccctl/internal/project"
 	"github.com/spf13/cobra"
 )
 
@@ -14,7 +14,7 @@ var restoreCmd = &cobra.Command{
 	Use:   "restore <session-id>",
 	Short: "Unpack an archived session .zip in place",
 	Long: `Unpack <uuid>.zip in place, then remove the archive. The session
-becomes visible to Claude and 'claudectl sessions' again.
+becomes visible to Claude and 'ccctl sessions' again.
 
 Refuses to overwrite an existing <uuid>.jsonl.`,
 	Args: cobra.ExactArgs(1),

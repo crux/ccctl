@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/crux/claudectl/internal/project"
+	"github.com/crux/ccctl/internal/project"
 	"github.com/spf13/cobra"
 )
 
