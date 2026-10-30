@@ -69,6 +69,42 @@ func findByUUID(uuid, ext string) (string, error) {
 	return matches[0], nil
 }
 
+// tmpPathPrefixes names system-tmp roots whose projects we hide by
+// default. Each matches both the decoded cwd ("/tmp/xyz") and its
+// Claude-encoded form ("-tmp-xyz").
+var tmpPathPrefixes = []string{
+	"/private/var/folders",
+	"/tmp",
+	"/private/tmp",
+}
+
+// IsTmp reports whether a project's cwd lives under a system tmp
+// directory. Matches both from the decoded cwd and from the encoded
+// namespace name (for projects whose cwd we couldn't decode), so a
+// drifted or move-not-resumed tmp session is still caught.
+func IsTmp(p Info) bool {
+	candidate := p.Cwd
+	sep := "/"
+	prefixes := tmpPathPrefixes
+	if candidate == "" {
+		candidate = p.EncodedName
+		// Encoded names start with '-' (the '/' prefix of the real
+		// absolute path) and use '-' instead of '/' everywhere else.
+		encoded := make([]string, len(tmpPathPrefixes))
+		for i, s := range tmpPathPrefixes {
+			encoded[i] = strings.ReplaceAll(s, "/", "-")
+		}
+		prefixes = encoded
+		sep = "-"
+	}
+	for _, prefix := range prefixes {
+		if candidate == prefix || strings.HasPrefix(candidate, prefix+sep) {
+			return true
+		}
+	}
+	return false
+}
+
 // Info is one project's enumeration record: on-disk directory, basic
 // counts, size totals, latest-touched mtime, and the real cwd it
 // represents (read from any .jsonl's cwd field; "" when no .jsonl is

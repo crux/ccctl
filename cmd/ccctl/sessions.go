@@ -1,17 +1,10 @@
 package main
 
 import (
-	"archive/zip"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"regexp"
-	"sort"
-	"strings"
-	"sync"
 	"text/tabwriter"
-	"time"
 
 	"github.com/crux/ccctl/internal/proc"
 	"github.com/crux/ccctl/internal/project"
@@ -19,10 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	sessionsArchived bool
-	sessionsWorkers  = 16 // bound concurrent meta reads to avoid piling onto the file system
-)
+var sessionsArchived bool
 
 var sessionsCmd = &cobra.Command{
 	Use:   "sessions [dir]",
@@ -38,16 +28,6 @@ sessions previously packed via claude-archive-session (marked
 
 func init() {
 	sessionsCmd.Flags().BoolVarP(&sessionsArchived, "archived", "a", false, "include archived (.zip) sessions")
-}
-
-var uuidRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-
-type sessionRow struct {
-	MTime    time.Time
-	Size     int64
-	UUID     string
-	Meta     session.Meta
-	Archived bool
 }
 
 func runSessions(cmd *cobra.Command, args []string) error {
@@ -70,57 +50,7 @@ func runSessions(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	entries, err := os.ReadDir(projectDir)
-	if err != nil {
-		return fmt.Errorf("read project dir: %w", err)
-	}
-
-	type pending struct {
-		path     string
-		uuid     string
-		mtime    time.Time
-		size     int64
-		archived bool
-	}
-	var pendings []pending
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		var uuid string
-		var archived bool
-		switch {
-		case strings.HasSuffix(name, ".jsonl"):
-			uuid = strings.TrimSuffix(name, ".jsonl")
-		case sessionsArchived && strings.HasSuffix(name, ".zip"):
-			uuid = strings.TrimSuffix(name, ".zip")
-			archived = true
-		default:
-			continue
-		}
-		if !uuidRE.MatchString(uuid) {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		pendings = append(pendings, pending{
-			path:     filepath.Join(projectDir, name),
-			uuid:     uuid,
-			mtime:    info.ModTime(),
-			size:     info.Size(),
-			archived: archived,
-		})
-	}
-
-	if len(pendings) == 0 {
-		fmt.Printf("No Claude sessions found for: %s\n", realDir)
-		return nil
-	}
-
-	// Fetch active-session UUIDs in parallel with the meta reads — the
+	// Fetch active-session UUIDs in parallel with ListInProject — the
 	// ps/lsof calls underneath take roughly as long as all the file I/O,
 	// so overlapping them keeps total latency close to max(both).
 	activeChan := make(chan proc.ActiveSet, 1)
@@ -129,29 +59,16 @@ func runSessions(cmd *cobra.Command, args []string) error {
 		activeChan <- set
 	}()
 
-	// Fan out meta reads with bounded concurrency.
-	rows := make([]sessionRow, len(pendings))
-	sem := make(chan struct{}, sessionsWorkers)
-	var wg sync.WaitGroup
-	for i, p := range pendings {
-		wg.Add(1)
-		go func(i int, p pending) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			var meta session.Meta
-			if p.archived {
-				meta, _ = readMetaFromArchive(p.path, p.uuid)
-			} else {
-				meta, _ = session.ReadMeta(p.path)
-			}
-			rows[i] = sessionRow{MTime: p.mtime, Size: p.size, UUID: p.uuid, Meta: meta, Archived: p.archived}
-		}(i, p)
+	rows, err := session.ListInProject(projectDir, sessionsArchived)
+	if err != nil {
+		return fmt.Errorf("list sessions: %w", err)
 	}
-	wg.Wait()
 	active := <-activeChan
 
-	sort.Slice(rows, func(i, j int) bool { return rows[i].MTime.After(rows[j].MTime) })
+	if len(rows) == 0 {
+		fmt.Printf("No Claude sessions found for: %s\n", realDir)
+		return nil
+	}
 
 	fmt.Printf("Claude sessions for: %s\n\n", realDir)
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
@@ -192,32 +109,4 @@ func runSessions(cmd *cobra.Command, args []string) error {
 			suffix)
 	}
 	return w.Flush()
-}
-
-// readMetaFromArchive opens a zip archive, finds the <uuid>.jsonl entry
-// inside it, reads it into memory, and extracts meta via the in-memory
-// variant. Returns zero Meta on any error (callers already tolerate it).
-func readMetaFromArchive(archivePath, uuid string) (session.Meta, error) {
-	zr, err := zip.OpenReader(archivePath)
-	if err != nil {
-		return session.Meta{}, err
-	}
-	defer zr.Close()
-	target := uuid + ".jsonl"
-	for _, f := range zr.File {
-		if filepath.Base(f.Name) != target {
-			continue
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return session.Meta{}, err
-		}
-		b, err := io.ReadAll(rc)
-		rc.Close()
-		if err != nil {
-			return session.Meta{}, err
-		}
-		return session.ReadMetaBytes(b)
-	}
-	return session.Meta{}, fmt.Errorf("%s not found in %s", target, archivePath)
 }

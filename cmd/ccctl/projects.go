@@ -71,7 +71,7 @@ func runProjects(cmd *cobra.Command, args []string) error {
 	fmt.Fprintln(w, " \tLATEST\tSIZE\tSESSIONS\tARCHIVED\tPROJECT")
 	hidden := 0
 	for _, p := range infos {
-		if !projectsAll && isTmpProject(p) {
+		if !projectsAll && project.IsTmp(p) {
 			hidden++
 			continue
 		}
@@ -95,35 +95,6 @@ func runProjects(cmd *cobra.Command, args []string) error {
 		fmt.Printf("\n%d system-tmp projects hidden (-a to include).\n", hidden)
 	}
 	return nil
-}
-
-// isTmpProject matches projects whose cwd lives under a system tmp
-// directory. Matched both from the decoded cwd and from the encoded
-// namespace name (for projects whose cwd we couldn't decode), so a
-// drifted or move-not-resumed tmp session is still caught.
-func isTmpProject(p project.Info) bool {
-	tmpPathPrefixes := []string{
-		"/private/var/folders",
-		"/tmp",
-		"/private/tmp",
-	}
-	candidate := p.Cwd
-	sep := "/"
-	if candidate == "" {
-		candidate = p.EncodedName
-		// Encoded names start with '-' (the '/' prefix of the real
-		// absolute path) and use '-' instead of '/' everywhere else.
-		for i, s := range tmpPathPrefixes {
-			tmpPathPrefixes[i] = strings.ReplaceAll(s, "/", "-")
-		}
-		sep = "-"
-	}
-	for _, prefix := range tmpPathPrefixes {
-		if candidate == prefix || strings.HasPrefix(candidate, prefix+sep) {
-			return true
-		}
-	}
-	return false
 }
 
 // displayProject picks a user-friendly string for a project row.
