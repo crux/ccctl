@@ -2,9 +2,13 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/crux/ccctl/internal/project"
+	"github.com/crux/ccctl/internal/session"
 )
 
 var (
@@ -19,6 +23,24 @@ var (
 
 	activePaneStyle = paneStyle.
 			BorderForeground(lipgloss.Color("12"))
+
+	paneTitleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("252"))
+
+	paneSubStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("244"))
+
+	cursorRowStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("15")).
+			Background(lipgloss.Color("238"))
+
+	activeMarkerStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("10"))
+
+	guessedMarkerStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("11"))
 
 	footerStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("244"))
@@ -37,7 +59,6 @@ func (m Model) View() string {
 
 	header := m.header()
 	footer := m.footer()
-	// Reserve 1 line for header, 1 for footer.
 	bodyHeight := m.height - 2
 	if bodyHeight < 3 {
 		bodyHeight = 3
@@ -46,7 +67,7 @@ func (m Model) View() string {
 	var body string
 	switch m.view {
 	case viewProjects, viewSessions:
-		body = m.renderMiller(bodyHeight)
+		body = m.renderBrowse(bodyHeight)
 	case viewActive:
 		body = m.renderActive(bodyHeight)
 	}
@@ -56,7 +77,7 @@ func (m Model) View() string {
 
 func (m Model) header() string {
 	title := fmt.Sprintf(" ccctl ui — :%s", m.view.label())
-	hint := "  (1 projects · 2 sessions · 3 active · : command · q quit)"
+	hint := "  (1/2/3 view · tab/h/l switch · j/k move · +/- resize rows · </> resize cols · : cmd · q quit)"
 	line := headerStyle.Render(title) + footerStyle.Render(hint)
 	return padLine(line, m.width)
 }
@@ -68,22 +89,34 @@ func (m Model) footer() string {
 	if m.status != "" {
 		return statusStyle.Render(m.status)
 	}
-	return footerStyle.Render(fmt.Sprintf(" view=%s  (Step 1 scaffold — data wiring arrives in Step 2)", m.view.label()))
+	return footerStyle.Render(fmt.Sprintf(" view=%s", m.view.label()))
 }
 
-// renderMiller lays out the browse-view frame: two narrow list columns
-// (projects, sessions) and one wide detail column. The focused list is
-// decided by m.view (projects view → projects pane; sessions view →
-// sessions pane); the detail pane always sits on the right.
-func (m Model) renderMiller(h int) string {
-	// Column widths: narrow / narrow / wide, roughly 22% / 28% / 50%.
-	// Minimums keep layouts legible on narrow terminals.
-	projW := clamp(m.width*22/100, 16, 40)
-	sessW := clamp(m.width*28/100, 20, 48)
-	// Remaining width minus borders/padding per column (2 + 2 + 2 = 6ish).
-	detailW := m.width - projW - sessW - 6
-	if detailW < 20 {
-		detailW = 20
+// renderBrowse lays out the browse frame: PROJECTS and SESSIONS in a
+// top row, DETAIL full-width below. Split ratios are driven by
+// Model.topRowPct and Model.projColPct — resizable at runtime.
+func (m Model) renderBrowse(h int) string {
+	topH := h * m.topRowPct / 100
+	if topH < 5 {
+		topH = 5
+	}
+	bottomH := h - topH
+	if bottomH < 4 {
+		bottomH = 4
+		topH = h - bottomH
+	}
+
+	// Border + padding costs: each pane spends 2 cols horizontally and
+	// 2 rows vertically on border, plus 2 cols on padding. The content
+	// region is (pane - 4) by (pane - 2).
+	projW := m.width * m.projColPct / 100
+	if projW < 22 {
+		projW = 22
+	}
+	sessW := m.width - projW
+	if sessW < 22 {
+		sessW = 22
+		projW = m.width - sessW
 	}
 
 	projStyle := paneStyle
@@ -94,63 +127,297 @@ func (m Model) renderMiller(h int) string {
 		sessStyle = activePaneStyle
 	}
 
-	// Account for border + padding when sizing the content region.
-	contentH := h - 2
-	if contentH < 1 {
-		contentH = 1
+	topContentH := topH - 2
+	if topContentH < 3 {
+		topContentH = 3
+	}
+	bottomContentH := bottomH - 2
+	if bottomContentH < 2 {
+		bottomContentH = 2
 	}
 
-	proj := projStyle.Width(projW).Height(contentH).Render(placeholderBlock(
-		"PROJECTS",
-		"(step 2)",
-		projW-4, contentH-1,
-	))
-	sess := sessStyle.Width(sessW).Height(contentH).Render(placeholderBlock(
-		"SESSIONS",
-		"(step 2)",
-		sessW-4, contentH-1,
-	))
-	detail := paneStyle.Width(detailW).Height(contentH).Render(placeholderBlock(
-		"DETAIL",
-		"title · uuid · cwd · size · mtime · status",
-		detailW-4, contentH-1,
-	))
+	proj := projStyle.Width(projW).Height(topContentH).Render(m.renderProjectsPane(projW-4, topContentH))
+	sess := sessStyle.Width(sessW).Height(topContentH).Render(m.renderSessionsPane(sessW-4, topContentH))
+	topRow := lipgloss.JoinHorizontal(lipgloss.Top, proj, sess)
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, proj, sess, detail)
+	detail := paneStyle.Width(m.width).Height(bottomContentH).Render(m.renderDetailPane(m.width-4, bottomContentH))
+	return lipgloss.JoinVertical(lipgloss.Left, topRow, detail)
 }
 
-// renderActive is the full-width single pane that will host the live
-// active-sessions list from Step 3.
 func (m Model) renderActive(h int) string {
-	w := m.width
 	contentH := h - 2
 	if contentH < 1 {
 		contentH = 1
 	}
-	return activePaneStyle.Width(w - 2).Height(contentH).Render(placeholderBlock(
-		"ACTIVE",
-		"live refresh arrives in Step 3",
-		w-6, contentH-1,
-	))
+	w := m.width - 2
+	body := paneTitleStyle.Render("ACTIVE") + "\n" + paneSubStyle.Render("live refresh arrives in Step 3")
+	return activePaneStyle.Width(w).Height(contentH).Render(padBlock(body, contentH))
 }
 
-// placeholderBlock renders a titled empty pane body sized to w×h.
-func placeholderBlock(title, subtitle string, w, h int) string {
-	if w < 1 {
-		w = 1
+// renderProjectsPane renders the PROJECTS list column in the given
+// inner size (w = content width, h = pane content height after border).
+func (m Model) renderProjectsPane(w, h int) string {
+	count := len(m.projects)
+	title := m.paneTitle("PROJECTS", m.projectCursor, count, m.projectsLoading && count == 0)
+	rowCap := h - 2
+	if rowCap < 1 {
+		rowCap = 1
 	}
-	if h < 1 {
-		h = 1
+	if count == 0 {
+		msg := paneSubStyle.Render("(loading…)")
+		if !m.projectsLoading {
+			msg = paneSubStyle.Render("(no projects)")
+		}
+		return title + "\n" + msg + strings.Repeat("\n", max(0, rowCap-1))
 	}
-	head := lipgloss.NewStyle().Bold(true).Render(title)
-	sub := lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(subtitle)
-	body := head + "\n" + sub
-	// Fill remaining lines with spaces so the border draws cleanly.
-	lines := strings.Count(body, "\n") + 1
-	for i := lines; i < h; i++ {
-		body += "\n"
+
+	home, _ := os.UserHomeDir()
+	top := scrollTop(m.projectCursor, rowCap, count)
+	var b strings.Builder
+	b.WriteString(title)
+	b.WriteString("\n")
+	for i := top; i < top+rowCap && i < count; i++ {
+		p := m.projects[i]
+		line := formatProjectRow(p, home, w)
+		if i == m.projectCursor {
+			line = cursorRowStyle.Render(padRight(line, w))
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
 	}
-	return body
+	return b.String()
+}
+
+func (m Model) renderSessionsPane(w, h int) string {
+	count := len(m.sessions)
+	title := m.paneTitle("SESSIONS", m.sessionCursor, count, m.sessionsLoading)
+	rowCap := h - 2
+	if rowCap < 1 {
+		rowCap = 1
+	}
+	if count == 0 {
+		var msg string
+		switch {
+		case m.sessionsLoading:
+			msg = paneSubStyle.Render("(loading…)")
+		case len(m.projects) == 0:
+			msg = paneSubStyle.Render("")
+		default:
+			msg = paneSubStyle.Render("(no sessions)")
+		}
+		return title + "\n" + msg + strings.Repeat("\n", max(0, rowCap-1))
+	}
+
+	top := scrollTop(m.sessionCursor, rowCap, count)
+	var b strings.Builder
+	b.WriteString(title)
+	b.WriteString("\n")
+	for i := top; i < top+rowCap && i < count; i++ {
+		r := m.sessions[i]
+		marker := m.sessionMarker(r.UUID)
+		line := marker + formatSessionRow(r, w-lipgloss.Width(marker))
+		if i == m.sessionCursor {
+			line = cursorRowStyle.Render(padRight(line, w))
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// renderDetailPane shows metadata of the row under the focused column.
+func (m Model) renderDetailPane(w, h int) string {
+	title := paneTitleStyle.Render("DETAIL")
+	switch m.view {
+	case viewProjects:
+		if m.projectCursor < 0 || m.projectCursor >= len(m.projects) {
+			return title + "\n" + paneSubStyle.Render("—")
+		}
+		return title + "\n" + m.projectDetail(m.projects[m.projectCursor], w)
+	case viewSessions:
+		if m.sessionCursor < 0 || m.sessionCursor >= len(m.sessions) {
+			return title + "\n" + paneSubStyle.Render("—")
+		}
+		return title + "\n" + m.sessionDetail(m.sessions[m.sessionCursor], w)
+	}
+	return title
+}
+
+func (m Model) projectDetail(p project.Info, w int) string {
+	home, _ := os.UserHomeDir()
+	cwd := p.Cwd
+	if cwd == "" {
+		cwd = "(unresolved — using encoded name)"
+	} else if home != "" && strings.HasPrefix(cwd, home) {
+		cwd = "~" + strings.TrimPrefix(cwd, home)
+	}
+	rows := []kv{
+		{"path", cwd},
+		{"encoded", p.EncodedName},
+		{"sessions", fmt.Sprintf("%d", p.Sessions)},
+		{"archived", fmt.Sprintf("%d", p.Archived)},
+		{"size", humanBytesCellTUI(p.TotalSize)},
+		{"latest", p.Latest.Format("2006-01-02 15:04")},
+	}
+	return renderKV(rows, w)
+}
+
+func (m Model) sessionDetail(r session.Row, w int) string {
+	status := ""
+	if m.activeLoaded {
+		switch {
+		case m.activeSet.Confident[r.UUID]:
+			status = "active"
+			if st := m.activeSet.Status[r.UUID]; st != "" {
+				status = "active · " + st
+			}
+		case m.activeSet.Guessed[r.UUID]:
+			status = "guessed-active"
+		default:
+			status = "idle"
+		}
+	}
+	archived := "no"
+	if r.Archived {
+		archived = "yes"
+	}
+	rows := []kv{
+		{"uuid", r.UUID},
+		{"title", nonEmpty(r.Meta.CustomTitle, "—")},
+		{"summary", nonEmpty(r.Meta.Summary, "—")},
+		{"cwd", nonEmpty(r.Meta.Cwd, "—")},
+		{"size", humanBytesCellTUI(r.Size)},
+		{"mtime", r.MTime.Format("2006-01-02 15:04")},
+		{"archived", archived},
+		{"status", nonEmpty(status, "—")},
+	}
+	return renderKV(rows, w)
+}
+
+type kv struct{ k, v string }
+
+func renderKV(rows []kv, w int) string {
+	keyW := 8
+	var b strings.Builder
+	for _, r := range rows {
+		key := paneSubStyle.Render(padRight(r.k, keyW))
+		val := truncate(r.v, w-keyW-1)
+		b.WriteString(key)
+		b.WriteString(" ")
+		b.WriteString(val)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// paneTitle formats the top line of a list pane: "<name> <cursor>/<count>".
+func (m Model) paneTitle(name string, cursor, count int, loading bool) string {
+	suffix := ""
+	if loading {
+		suffix = " …"
+	}
+	if count == 0 {
+		return paneTitleStyle.Render(fmt.Sprintf("%s 0%s", name, suffix))
+	}
+	return paneTitleStyle.Render(fmt.Sprintf("%s %d/%d%s", name, cursor+1, count, suffix))
+}
+
+func formatProjectRow(p project.Info, home string, w int) string {
+	date := p.Latest.Format("01-02 15:04")
+	path := p.Cwd
+	if path == "" {
+		path = p.EncodedName
+	} else if home != "" && strings.HasPrefix(path, home) {
+		path = "~" + strings.TrimPrefix(path, home)
+	}
+	// Abbreviate: keep only the last two path segments when it would
+	// otherwise not fit. Simple heuristic — avoids an unreadable left-
+	// anchored truncation that would hide the project name.
+	avail := w - len(date) - 1
+	if avail < 1 {
+		avail = 1
+	}
+	path = abbreviatePath(path, avail)
+	return fmt.Sprintf("%s %s", date, path)
+}
+
+func formatSessionRow(r session.Row, w int) string {
+	date := r.MTime.Format("01-02 15:04")
+	title := r.Meta.Display()
+	if r.Archived {
+		title = "[arc] " + title
+	}
+	avail := w - len(date) - 1
+	if avail < 1 {
+		avail = 1
+	}
+	return fmt.Sprintf("%s %s", date, truncate(title, avail))
+}
+
+func (m Model) sessionMarker(uuid string) string {
+	if !m.activeLoaded {
+		return "  "
+	}
+	switch {
+	case m.activeSet.Confident[uuid]:
+		return activeMarkerStyle.Render("* ")
+	case m.activeSet.Guessed[uuid]:
+		return guessedMarkerStyle.Render("~ ")
+	}
+	return "  "
+}
+
+// abbreviatePath shortens path to fit limit chars; prefers to drop
+// middle segments and keep the first and last. Shows ".../last/two"
+// when nothing else fits.
+func abbreviatePath(p string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	if len(p) <= limit {
+		return p
+	}
+	parts := strings.Split(p, string(filepath.Separator))
+	if len(parts) >= 2 {
+		short := ".../" + strings.Join(parts[len(parts)-2:], "/")
+		if len(short) <= limit {
+			return short
+		}
+	}
+	// Last-resort left truncate.
+	if limit >= 4 {
+		return "..." + p[len(p)-(limit-3):]
+	}
+	return p[:limit]
+}
+
+func truncate(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	if w <= 1 {
+		return "…"
+	}
+	// Lipgloss width-safe truncation on runes.
+	runes := []rune(s)
+	for i := len(runes); i > 0; i-- {
+		cand := string(runes[:i]) + "…"
+		if lipgloss.Width(cand) <= w {
+			return cand
+		}
+	}
+	return "…"
+}
+
+func padRight(s string, w int) string {
+	plain := lipgloss.Width(s)
+	if plain >= w {
+		return s
+	}
+	return s + strings.Repeat(" ", w-plain)
 }
 
 func padLine(s string, w int) string {
@@ -161,6 +428,33 @@ func padLine(s string, w int) string {
 	return s + strings.Repeat(" ", w-plain)
 }
 
+func padBlock(s string, h int) string {
+	lines := strings.Count(s, "\n") + 1
+	for i := lines; i < h; i++ {
+		s += "\n"
+	}
+	return s
+}
+
+// scrollTop returns the top row index for a viewport of capacity cap
+// that must keep cursor visible, over a list of length n.
+func scrollTop(cursor, cap, n int) int {
+	if n <= cap {
+		return 0
+	}
+	if cursor < cap {
+		return 0
+	}
+	top := cursor - cap + 1
+	if top+cap > n {
+		top = n - cap
+	}
+	if top < 0 {
+		top = 0
+	}
+	return top
+}
+
 func clamp(v, lo, hi int) int {
 	if v < lo {
 		return lo
@@ -169,4 +463,37 @@ func clamp(v, lo, hi int) int {
 		return hi
 	}
 	return v
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func nonEmpty(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
+}
+
+// humanBytesCellTUI mirrors cmd/ccctl's humanBytesCell shape without
+// pulling the CLI package in. Decimal-aligned, fixed small format.
+func humanBytesCellTUI(n int64) string {
+	const (
+		KB = 1024
+		MB = KB * 1024
+		GB = MB * 1024
+	)
+	switch {
+	case n >= GB:
+		return fmt.Sprintf("%.1f G", float64(n)/float64(GB))
+	case n >= MB:
+		return fmt.Sprintf("%.1f M", float64(n)/float64(MB))
+	case n >= KB:
+		return fmt.Sprintf("%.1f K", float64(n)/float64(KB))
+	}
+	return fmt.Sprintf("%d B", n)
 }
