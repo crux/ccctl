@@ -13,6 +13,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var projectsAll bool
+
 var projectsCmd = &cobra.Command{
 	Use:   "projects",
 	Short: "List known Claude Code project namespaces, newest first",
@@ -28,9 +30,18 @@ Columns:
   ARCHIVED    .zip count
   PROJECT     real cwd read from any .jsonl's cwd field; falls back
               to the encoded project-dir name when no .jsonl can be
-              read (archive-only projects, or empty)`,
+              read (archive-only projects, or empty)
+
+Projects whose cwd lives under a system tmp directory
+(/private/var/folders/*, /tmp/*, /private/tmp/*) — typically one-off
+runs from a shell like 'tmp-claude' — are hidden by default. Pass
+-a / --all to include them.`,
 	Args: cobra.NoArgs,
 	RunE: runProjects,
+}
+
+func init() {
+	projectsCmd.Flags().BoolVarP(&projectsAll, "all", "a", false, "include system-tmp projects (/tmp, /private/tmp, /private/var/folders)")
 }
 
 func runProjects(cmd *cobra.Command, args []string) error {
@@ -58,7 +69,12 @@ func runProjects(cmd *cobra.Command, args []string) error {
 	home, _ := os.UserHomeDir()
 	w := tabwriter.NewWriter(os.Stdout, 0, 2, 2, ' ', 0)
 	fmt.Fprintln(w, " \tLATEST\tSIZE\tSESSIONS\tARCHIVED\tPROJECT")
+	hidden := 0
 	for _, p := range infos {
+		if !projectsAll && isTmpProject(p) {
+			hidden++
+			continue
+		}
 		marker := " "
 		if activeByDir[p.Dir] {
 			marker = "*"
@@ -72,7 +88,42 @@ func runProjects(cmd *cobra.Command, args []string) error {
 			p.Archived,
 			displayPath)
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if hidden > 0 {
+		fmt.Printf("\n%d system-tmp projects hidden (-a to include).\n", hidden)
+	}
+	return nil
+}
+
+// isTmpProject matches projects whose cwd lives under a system tmp
+// directory. Matched both from the decoded cwd and from the encoded
+// namespace name (for projects whose cwd we couldn't decode), so a
+// drifted or move-not-resumed tmp session is still caught.
+func isTmpProject(p project.Info) bool {
+	tmpPathPrefixes := []string{
+		"/private/var/folders",
+		"/tmp",
+		"/private/tmp",
+	}
+	candidate := p.Cwd
+	sep := "/"
+	if candidate == "" {
+		candidate = p.EncodedName
+		// Encoded names start with '-' (the '/' prefix of the real
+		// absolute path) and use '-' instead of '/' everywhere else.
+		for i, s := range tmpPathPrefixes {
+			tmpPathPrefixes[i] = strings.ReplaceAll(s, "/", "-")
+		}
+		sep = "-"
+	}
+	for _, prefix := range tmpPathPrefixes {
+		if candidate == prefix || strings.HasPrefix(candidate, prefix+sep) {
+			return true
+		}
+	}
+	return false
 }
 
 // displayProject picks a user-friendly string for a project row.
