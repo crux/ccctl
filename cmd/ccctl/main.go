@@ -51,7 +51,6 @@ func init() {
 	rootCmd.AddCommand(moveCmd)
 	rootCmd.AddCommand(archiveCmd)
 	rootCmd.AddCommand(restoreCmd)
-	rootCmd.AddCommand(whereCmd)
 	rootCmd.AddCommand(focusCmd)
 	rootCmd.AddCommand(takeoverCmd)
 	rootCmd.AddCommand(findCmd)

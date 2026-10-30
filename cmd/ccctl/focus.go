@@ -19,8 +19,7 @@ running a given Claude Code session. Supported terminals:
   - Terminal.app  (macOS native)
   - iTerm2        (macOS)
 
-For other terminals, falls through with a 'not implemented' error and
-points at 'ccctl where' for a manual lookup.
+For other terminals, falls through with a 'not implemented' error.
 
 On first use, macOS will prompt to grant ccctl permission to
 control Terminal.app / iTerm2 via osascript — one-time dialog.`,
@@ -46,10 +45,9 @@ func runFocus(cmd *cobra.Command, args []string) error {
 	case "Terminal.app":
 		return focusTerminalApp(loc.Session.PID)
 	case "":
-		return fmt.Errorf("no supported terminal detected in ancestry; see `ccctl where %s`", loc.Session.SessionID)
+		return fmt.Errorf("no supported terminal detected in ancestry for session %s", loc.Session.SessionID)
 	default:
-		return fmt.Errorf("focus not implemented for %s (stub); see `ccctl where %s`",
-			loc.Terminal, loc.Session.SessionID)
+		return fmt.Errorf("focus not implemented for %s (stub)", loc.Terminal)
 	}
 }
 

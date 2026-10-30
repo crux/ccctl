@@ -13,8 +13,7 @@ import (
 // SessionLocation bundles everything a locator can determine about a
 // running Claude Code session: its PIDSession, the process ancestor
 // chain, the detected terminal emulator (if any), and the tmux pane
-// coordinates (if the process runs under tmux). Shared by `where` and
-// `focus`.
+// coordinates (if the process runs under tmux). Used by `focus`.
 type SessionLocation struct {
 	Session    *proc.PIDSession
 	Ancestors  []proc.Ancestor
