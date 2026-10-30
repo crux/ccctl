@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/crux/ccctl/internal/proc"
 	"github.com/crux/ccctl/internal/project"
 	"github.com/crux/ccctl/internal/session"
 )
@@ -144,15 +145,108 @@ func (m Model) renderBrowse(h int) string {
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, detail)
 }
 
+// renderActive is the full-width :active view — one row per running
+// claude process. The pane is single, cursor-navigable, and refreshes
+// every activeRefreshInterval while this view is current.
 func (m Model) renderActive(h int) string {
 	contentH := h - 2
-	if contentH < 1 {
-		contentH = 1
+	if contentH < 3 {
+		contentH = 3
 	}
 	w := m.width - 2
-	body := paneTitleStyle.Render("ACTIVE") + "\n" + paneSubStyle.Render("live refresh arrives in Step 3")
-	return activePaneStyle.Width(w).Height(contentH).Render(padBlock(body, contentH))
+	innerW := w - 4
+
+	count := len(m.active)
+	title := m.paneTitle("ACTIVE", m.activeCursor, count, m.activeLoading && count == 0)
+	refreshNote := ""
+	if !m.activeLastRefresh.IsZero() {
+		refreshNote = paneSubStyle.Render("  last " + m.activeLastRefresh.Format("15:04:05"))
+	}
+	header := title + refreshNote
+
+	if count == 0 {
+		msg := paneSubStyle.Render("(loading…)")
+		if !m.activeLoading {
+			msg = paneSubStyle.Render("(no running claude processes)")
+		}
+		body := header + "\n" + msg
+		return activePaneStyle.Width(w).Height(contentH).Render(padBlock(body, contentH))
+	}
+
+	// Column widths. STATUS, PID and UUID stay fixed; TITLE and CWD
+	// share the remainder.
+	const (
+		statusW = 7
+		pidW    = 7
+		uuidW   = 10
+		gapW    = 1
+	)
+	flex := innerW - (statusW + pidW + uuidW + 3*gapW) - 2 // 2 cols reserve for title/cwd gap
+	if flex < 10 {
+		flex = 10
+	}
+	titleW := flex / 2
+	cwdW := flex - titleW
+
+	// Column headings line.
+	headRow := paneSubStyle.Render(
+		padRight("STATUS", statusW) + " " +
+			padRight("PID", pidW) + " " +
+			padRight("UUID", uuidW) + " " +
+			padRight("TITLE", titleW) + " " +
+			padRight("CWD", cwdW),
+	)
+
+	rowCap := contentH - 3 // header + heading + 1 line of breathing room
+	if rowCap < 1 {
+		rowCap = 1
+	}
+
+	home, _ := os.UserHomeDir()
+	top := scrollTop(m.activeCursor, rowCap, count)
+	var b strings.Builder
+	b.WriteString(header)
+	b.WriteString("\n")
+	b.WriteString(headRow)
+	b.WriteString("\n")
+	for i := top; i < top+rowCap && i < count; i++ {
+		p := m.active[i]
+		row := formatActiveRow(p, home, statusW, pidW, uuidW, titleW, cwdW)
+		if i == m.activeCursor {
+			row = cursorRowStyle.Render(padRight(row, innerW))
+		}
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+	return activePaneStyle.Width(w).Height(contentH).Render(padBlock(b.String(), contentH))
 }
+
+// formatActiveRow lays out one proc.Info into the fixed-plus-flex
+// columns used by renderActive.
+func formatActiveRow(p proc.Info, home string, statusW, pidW, uuidW, titleW, cwdW int) string {
+	status := p.Status
+	if status == "" {
+		status = "—"
+	}
+	uuid := p.UUID
+	if len(uuid) > uuidW {
+		uuid = uuid[:uuidW-1] + "…"
+	}
+	title := p.Title
+	if title == "" {
+		title = "(no title)"
+	}
+	cwd := p.Cwd
+	if home != "" && strings.HasPrefix(cwd, home) {
+		cwd = "~" + strings.TrimPrefix(cwd, home)
+	}
+	return padRight(status, statusW) + " " +
+		padRight(fmt.Sprintf("%d", p.PID), pidW) + " " +
+		padRight(uuid, uuidW) + " " +
+		padRight(truncate(title, titleW), titleW) + " " +
+		padRight(truncate(cwd, cwdW), cwdW)
+}
+
 
 // renderProjectsPane renders the PROJECTS list column in the given
 // inner size (w = content width, h = pane content height after border).

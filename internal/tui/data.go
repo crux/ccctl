@@ -2,12 +2,18 @@ package tui
 
 import (
 	"sort"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/crux/ccctl/internal/proc"
 	"github.com/crux/ccctl/internal/project"
 	"github.com/crux/ccctl/internal/session"
 )
+
+// activeRefreshInterval is the cadence for the :active view's live
+// refresh. 2s matches the k9s-style default — fast enough to feel
+// live, slow enough to not hammer lsof.
+const activeRefreshInterval = 2 * time.Second
 
 // projectsLoadedMsg carries the enumerated project list for the browse
 // frame. The slice is already sorted newest-first.
@@ -66,4 +72,28 @@ func loadActiveCmd() tea.Cmd {
 		set, _ := proc.ActiveUUIDs()
 		return activeLoadedMsg{set: set}
 	}
+}
+
+// activeListLoadedMsg carries the full enumerated active-process list
+// for the :active view. The slice is already sorted by PID.
+type activeListLoadedMsg struct {
+	procs []proc.Info
+	err   error
+}
+
+// loadActiveListCmd runs the fuller ListClaudeProcesses — one entry
+// per running `claude` process with cwd, uuid, title, status.
+func loadActiveListCmd() tea.Cmd {
+	return func() tea.Msg {
+		procs, err := proc.ListClaudeProcesses()
+		return activeListLoadedMsg{procs: procs, err: err}
+	}
+}
+
+// activeTickMsg is the 2s heartbeat for the :active view. Carries no
+// payload — on receipt we fire a fresh load and schedule the next tick.
+type activeTickMsg struct{}
+
+func activeTickCmd() tea.Cmd {
+	return tea.Tick(activeRefreshInterval, func(time.Time) tea.Msg { return activeTickMsg{} })
 }

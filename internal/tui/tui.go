@@ -11,6 +11,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/crux/ccctl/internal/proc"
@@ -63,6 +64,17 @@ type Model struct {
 	sessionsLoading bool
 	activeSet       proc.ActiveSet
 	activeLoaded    bool
+
+	// :active view state. active is the full enumerated list of running
+	// claude processes; activeCursor selects a row. activeLoading flips
+	// while a load is in flight. activeTicking is true when the view is
+	// currently receiving 2s refreshes — gated so no work happens while
+	// the user is elsewhere.
+	active        []proc.Info
+	activeCursor  int
+	activeLoading bool
+	activeTicking bool
+	activeLastRefresh time.Time
 
 	// Split ratios, percent of the available body region.
 	// topRowPct   — height of PROJECTS/SESSIONS row (vs DETAIL below).
@@ -144,6 +156,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeSet = msg.set
 		return m, nil
 
+	case activeListLoadedMsg:
+		m.activeLoading = false
+		m.activeLastRefresh = time.Now()
+		if msg.err != nil {
+			m.status = "active: " + msg.err.Error()
+			return m, nil
+		}
+		m.active = msg.procs
+		if m.activeCursor >= len(m.active) {
+			if len(m.active) == 0 {
+				m.activeCursor = 0
+			} else {
+				m.activeCursor = len(m.active) - 1
+			}
+		}
+		return m, nil
+
+	case activeTickMsg:
+		// Tick is scoped to :active. If we're elsewhere, let the tick
+		// die quietly — a new one spins up on next entry.
+		if m.view != viewActive {
+			m.activeTicking = false
+			return m, nil
+		}
+		return m, tea.Batch(loadActiveListCmd(), activeTickCmd())
+
 	case tea.KeyMsg:
 		if m.cmdMode {
 			return m.updateCmdMode(msg)
@@ -165,25 +203,25 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	// View / column switching
 	case "1":
-		return m.switchView(viewProjects), nil
+		return m.switchView(viewProjects)
 	case "2":
-		return m.switchView(viewSessions), nil
+		return m.switchView(viewSessions)
 	case "3":
-		return m.switchView(viewActive), nil
+		return m.switchView(viewActive)
 	case "tab":
 		if m.view == viewProjects {
-			return m.switchView(viewSessions), nil
+			return m.switchView(viewSessions)
 		}
 		if m.view == viewSessions {
-			return m.switchView(viewProjects), nil
+			return m.switchView(viewProjects)
 		}
 	case "h":
 		if m.view == viewSessions {
-			return m.switchView(viewProjects), nil
+			return m.switchView(viewProjects)
 		}
 	case "l":
 		if m.view == viewProjects {
-			return m.switchView(viewSessions), nil
+			return m.switchView(viewSessions)
 		}
 
 	// Cursor movement within the focused list
@@ -241,14 +279,14 @@ func (m Model) updateCmdMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 // runCommand interprets a `:…` command. Unknown commands land in the
 // status line.
-func (m Model) runCommand(cmd string) (Model, tea.Cmd) {
+func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 	switch cmd {
 	case "projects":
-		return m.switchView(viewProjects), nil
+		return m.switchView(viewProjects)
 	case "sessions":
-		return m.switchView(viewSessions), nil
+		return m.switchView(viewSessions)
 	case "active":
-		return m.switchView(viewActive), nil
+		return m.switchView(viewActive)
 	case "q", "quit":
 		m.status = "use 'q' in normal mode to quit"
 		return m, nil
@@ -261,18 +299,23 @@ func (m Model) runCommand(cmd string) (Model, tea.Cmd) {
 	}
 }
 
-// switchView moves to v. When moving to viewSessions, ensure the
-// sessions slice matches the project under the cursor; kick off a
-// load if not.
-func (m Model) switchView(v view) Model {
+// switchView moves to v. Entering :active kicks off an immediate load
+// and starts the 2s refresh tick if one isn't already running. The
+// tick naturally dies when the user leaves :active.
+func (m Model) switchView(v view) (tea.Model, tea.Cmd) {
+	prev := m.view
 	m.view = v
-	// No cmd batching here — the caller returns (Model, tea.Cmd); where
-	// switchView is used from updateNormal, we already have a nil second
-	// return. If switching requires a session load, we rely on the
-	// loadSessionsForCursor cmd being issued the next time it is needed
-	// (projectsLoadedMsg or moveCursor on projects). Trigger an immediate
-	// load here when entering :sessions.
-	return m
+	if v == viewActive && prev != viewActive {
+		var cmds []tea.Cmd
+		m.activeLoading = true
+		cmds = append(cmds, loadActiveListCmd())
+		if !m.activeTicking {
+			m.activeTicking = true
+			cmds = append(cmds, activeTickCmd())
+		}
+		return m, tea.Batch(cmds...)
+	}
+	return m, nil
 }
 
 // moveCursor shifts the focused list's cursor by delta and, if that
@@ -290,6 +333,12 @@ func (m Model) moveCursor(delta int) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.sessionCursor = clamp(m.sessionCursor+delta, 0, len(m.sessions)-1)
+		return m, nil
+	case viewActive:
+		if len(m.active) == 0 {
+			return m, nil
+		}
+		m.activeCursor = clamp(m.activeCursor+delta, 0, len(m.active)-1)
 		return m, nil
 	}
 	return m, nil
@@ -314,6 +363,15 @@ func (m Model) jumpCursor(target int) (Model, tea.Cmd) {
 			target = len(m.sessions) - 1
 		}
 		m.sessionCursor = clamp(target, 0, len(m.sessions)-1)
+		return m, nil
+	case viewActive:
+		if len(m.active) == 0 {
+			return m, nil
+		}
+		if target < 0 {
+			target = len(m.active) - 1
+		}
+		m.activeCursor = clamp(target, 0, len(m.active)-1)
 		return m, nil
 	}
 	return m, nil
