@@ -56,6 +56,7 @@ func init() {
 	rootCmd.AddCommand(takeoverCmd)
 	rootCmd.AddCommand(findCmd)
 	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(uiCmd)
 	// Silence cobra's own error echo — main.go prints via Fprintln above
 	// so we can prefix with "ccctl:".
 	rootCmd.SilenceErrors = true
