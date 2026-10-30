@@ -3,16 +3,14 @@
 package project
 
 import (
-	"bufio"
-	"bytes"
-	"encoding/json"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/crux/ccctl/internal/session"
 )
 
 // EncodePath mirrors Claude Code's convention for converting an absolute
@@ -86,12 +84,6 @@ type Info struct {
 	Latest      time.Time // newest mtime among .jsonl + .zip
 }
 
-// cwdScanLimit caps how far we read into a .jsonl looking for a cwd
-// field. cwd typically appears on user turns within the first few KB,
-// so 1 MB is a wide safety margin without opening a window into
-// multi-hundred-MB files.
-const cwdScanLimit int64 = 1024 * 1024
-
 // ListProjects enumerates ~/.claude/projects/ and returns one Info per
 // subdirectory. Projects are returned in no particular order (callers
 // sort). Enumeration is parallel across projects; each worker does one
@@ -134,13 +126,20 @@ func ListProjects() ([]Info, error) {
 // summariseProject fills in one Info by scanning the project dir.
 // Returns ok=false for empty or unreadable project directories so
 // callers can skip them.
+//
+// Cwd resolution: read session.Meta from the NEWEST .jsonl. ReadMeta
+// reverse-scans and takes the last-wins value, so for a session that
+// was moved via `ccctl move` and then kept running, the cwd field it
+// surfaces is the one claude wrote after the move — not the stale
+// cwd from the session's first lines.
 func summariseProject(dir, name string) (Info, bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return Info{}, false
 	}
 	out := Info{Dir: dir, EncodedName: name}
-	var firstJsonl string
+	var newestJsonl string
+	var newestJsonlMtime time.Time
 	for _, e := range entries {
 		if e.IsDir() {
 			continue
@@ -153,8 +152,9 @@ func summariseProject(dir, name string) (Info, bool) {
 		case strings.HasSuffix(e.Name(), ".jsonl"):
 			out.Sessions++
 			out.TotalSize += fi.Size()
-			if firstJsonl == "" {
-				firstJsonl = filepath.Join(dir, e.Name())
+			if fi.ModTime().After(newestJsonlMtime) {
+				newestJsonl = filepath.Join(dir, e.Name())
+				newestJsonlMtime = fi.ModTime()
 			}
 		case strings.HasSuffix(e.Name(), ".zip"):
 			out.Archived++
@@ -169,38 +169,24 @@ func summariseProject(dir, name string) (Info, bool) {
 	if out.Sessions == 0 && out.Archived == 0 {
 		return Info{}, false
 	}
-	if firstJsonl != "" {
-		out.Cwd = readCwdFrom(firstJsonl)
+	// Keep Cwd only when it round-trips to the project namespace
+	// name. Protects against two drift cases:
+	//   1. Session moved via `ccctl move` but never resumed afterwards —
+	//      every cwd in the file still points at the OLD namespace.
+	//   2. Session started in cwd A (where its file lives) and then
+	//      shifted to cwd B mid-session via --add-dir or shell cd —
+	//      last-wins reports B while the file physically lives under A.
+	// A cwd whose encoding equals this project's directory basename is
+	// the one we can show; anything else means we have no reliable
+	// decoded path and fall back to the encoded name at display time.
+	if newestJsonl != "" {
+		if m, err := session.ReadMeta(newestJsonl); err == nil && m.Cwd != "" {
+			if EncodePath(m.Cwd) == name {
+				out.Cwd = m.Cwd
+			}
+		}
 	}
 	return out, true
-}
-
-// readCwdFrom scans the opening cwdScanLimit bytes of a .jsonl for any
-// entry carrying a cwd field. Returns "" when none is found or the
-// file cannot be opened.
-func readCwdFrom(path string) string {
-	f, err := os.Open(path)
-	if err != nil {
-		return ""
-	}
-	defer f.Close()
-	reader := bufio.NewReader(&io.LimitedReader{R: f, N: cwdScanLimit})
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 128*1024), 1024*1024)
-	marker := []byte(`"cwd":`)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if !bytes.Contains(line, marker) {
-			continue
-		}
-		var entry struct {
-			Cwd string `json:"cwd"`
-		}
-		if err := json.Unmarshal(line, &entry); err == nil && entry.Cwd != "" {
-			return entry.Cwd
-		}
-	}
-	return ""
 }
 
 // NewestSessionFile returns the newest *.jsonl in a cwd's project dir

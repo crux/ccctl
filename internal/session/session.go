@@ -15,6 +15,7 @@ import (
 type Meta struct {
 	CustomTitle string
 	Summary     string
+	Cwd         string // last-wins cwd from any event that carries one
 }
 
 // Display picks a display-ready label from available fields.
@@ -77,6 +78,7 @@ func readMeta(r io.ReaderAt, size int64) (Meta, error) {
 
 	titleFound := false
 	summaryFound := false
+	cwdFound := false
 
 	// `carry` holds the bytes of a partial line taken from the START of
 	// a newer window — its completion sits at the END of this (older)
@@ -85,7 +87,7 @@ func readMeta(r io.ReaderAt, size int64) (Meta, error) {
 
 	windowEnd := size
 	for windowEnd > 0 {
-		if titleFound && summaryFound {
+		if titleFound && summaryFound && cwdFound {
 			break
 		}
 		if size-windowEnd >= maxScanBytes {
@@ -129,7 +131,7 @@ func readMeta(r io.ReaderAt, size int64) (Meta, error) {
 
 		// Scan complete lines in buf[processStart:] in file (forward)
 		// order so the latest occurrence in this window wins locally.
-		var winTitle, winSummary string
+		var winTitle, winSummary, winCwd string
 		for _, line := range bytes.Split(buf[processStart:], []byte{'\n'}) {
 			if len(line) == 0 {
 				continue
@@ -138,6 +140,7 @@ func readMeta(r io.ReaderAt, size int64) (Meta, error) {
 				Type        string `json:"type"`
 				CustomTitle string `json:"customTitle"`
 				Summary     string `json:"summary"`
+				Cwd         string `json:"cwd"`
 			}
 			if err := json.Unmarshal(line, &entry); err != nil {
 				continue // skip malformed lines rather than aborting
@@ -152,6 +155,11 @@ func readMeta(r io.ReaderAt, size int64) (Meta, error) {
 					winSummary = entry.Summary
 				}
 			}
+			// Any event type may carry a cwd field; take the last
+			// seen locally in this window.
+			if entry.Cwd != "" {
+				winCwd = entry.Cwd
+			}
 		}
 
 		// Promote window-local values to the result only if we have not
@@ -163,6 +171,10 @@ func readMeta(r io.ReaderAt, size int64) (Meta, error) {
 		if !summaryFound && winSummary != "" {
 			m.Summary = winSummary
 			summaryFound = true
+		}
+		if !cwdFound && winCwd != "" {
+			m.Cwd = winCwd
+			cwdFound = true
 		}
 
 		windowEnd = windowStart
