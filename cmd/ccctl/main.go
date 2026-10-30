@@ -47,6 +47,7 @@ func main() {
 
 func init() {
 	rootCmd.AddCommand(psCmd)
+	rootCmd.AddCommand(projectsCmd)
 	rootCmd.AddCommand(sessionsCmd)
 	rootCmd.AddCommand(moveCmd)
 	rootCmd.AddCommand(archiveCmd)

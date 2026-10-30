@@ -3,10 +3,16 @@
 package project
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 )
 
 // EncodePath mirrors Claude Code's convention for converting an absolute
@@ -63,6 +69,138 @@ func findByUUID(uuid, ext string) (string, error) {
 		return "", nil
 	}
 	return matches[0], nil
+}
+
+// Info is one project's enumeration record: on-disk directory, basic
+// counts, size totals, latest-touched mtime, and the real cwd it
+// represents (read from any .jsonl's cwd field; "" when no .jsonl is
+// readable, in which case the encoded directory basename is the only
+// signal callers have).
+type Info struct {
+	Dir         string    // absolute path under ~/.claude/projects/
+	EncodedName string    // basename of Dir
+	Cwd         string    // decoded cwd pulled from first readable .jsonl; may be ""
+	Sessions    int       // *.jsonl count
+	Archived    int       // *.zip count
+	TotalSize   int64     // sum of .jsonl + .zip sizes
+	Latest      time.Time // newest mtime among .jsonl + .zip
+}
+
+// cwdScanLimit caps how far we read into a .jsonl looking for a cwd
+// field. cwd typically appears on user turns within the first few KB,
+// so 1 MB is a wide safety margin without opening a window into
+// multi-hundred-MB files.
+const cwdScanLimit int64 = 1024 * 1024
+
+// ListProjects enumerates ~/.claude/projects/ and returns one Info per
+// subdirectory. Projects are returned in no particular order (callers
+// sort). Enumeration is parallel across projects; each worker does one
+// ReadDir and at most one bounded .jsonl read for cwd resolution.
+func ListProjects() ([]Info, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	root := filepath.Join(home, ".claude", "projects")
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+
+	infos := make([]Info, 0, len(entries))
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		wg.Add(1)
+		go func(name string) {
+			defer wg.Done()
+			dir := filepath.Join(root, name)
+			info, ok := summariseProject(dir, name)
+			if !ok {
+				return
+			}
+			mu.Lock()
+			infos = append(infos, info)
+			mu.Unlock()
+		}(e.Name())
+	}
+	wg.Wait()
+	return infos, nil
+}
+
+// summariseProject fills in one Info by scanning the project dir.
+// Returns ok=false for empty or unreadable project directories so
+// callers can skip them.
+func summariseProject(dir, name string) (Info, bool) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return Info{}, false
+	}
+	out := Info{Dir: dir, EncodedName: name}
+	var firstJsonl string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(e.Name(), ".jsonl"):
+			out.Sessions++
+			out.TotalSize += fi.Size()
+			if firstJsonl == "" {
+				firstJsonl = filepath.Join(dir, e.Name())
+			}
+		case strings.HasSuffix(e.Name(), ".zip"):
+			out.Archived++
+			out.TotalSize += fi.Size()
+		default:
+			continue
+		}
+		if fi.ModTime().After(out.Latest) {
+			out.Latest = fi.ModTime()
+		}
+	}
+	if out.Sessions == 0 && out.Archived == 0 {
+		return Info{}, false
+	}
+	if firstJsonl != "" {
+		out.Cwd = readCwdFrom(firstJsonl)
+	}
+	return out, true
+}
+
+// readCwdFrom scans the opening cwdScanLimit bytes of a .jsonl for any
+// entry carrying a cwd field. Returns "" when none is found or the
+// file cannot be opened.
+func readCwdFrom(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	reader := bufio.NewReader(&io.LimitedReader{R: f, N: cwdScanLimit})
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 128*1024), 1024*1024)
+	marker := []byte(`"cwd":`)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if !bytes.Contains(line, marker) {
+			continue
+		}
+		var entry struct {
+			Cwd string `json:"cwd"`
+		}
+		if err := json.Unmarshal(line, &entry); err == nil && entry.Cwd != "" {
+			return entry.Cwd
+		}
+	}
+	return ""
 }
 
 // NewestSessionFile returns the newest *.jsonl in a cwd's project dir
