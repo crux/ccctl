@@ -1,10 +1,13 @@
 package tui
 
 import (
+	"os"
+	"os/exec"
 	"sort"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/crux/ccctl/internal/focus"
 	"github.com/crux/ccctl/internal/proc"
 	"github.com/crux/ccctl/internal/project"
 	"github.com/crux/ccctl/internal/session"
@@ -96,4 +99,39 @@ type activeTickMsg struct{}
 
 func activeTickCmd() tea.Cmd {
 	return tea.Tick(activeRefreshInterval, func(time.Time) tea.Msg { return activeTickMsg{} })
+}
+
+// focusDoneMsg carries the outcome of a focus.ByUUID call so the TUI
+// can surface a status-line message on failure.
+type focusDoneMsg struct {
+	uuid string
+	err  error
+}
+
+// focusCmd runs focus.ByUUID in a goroutine; the TUI keeps rendering.
+func focusCmd(uuid string) tea.Cmd {
+	return func() tea.Msg {
+		return focusDoneMsg{uuid: uuid, err: focus.ByUUID(uuid)}
+	}
+}
+
+// resumeDoneMsg carries the outcome of a `claude --resume` run. The
+// TUI reloads the active list on receipt so the row's state flips to
+// running after a successful resume.
+type resumeDoneMsg struct {
+	uuid string
+	err  error
+}
+
+// resumeCmd suspends the TUI, runs `claude --resume <uuid>` with its
+// standard streams attached, and returns the TUI on exit. Cwd must
+// be the real path the session belongs to — otherwise claude starts
+// a new session in the current cwd instead of resuming.
+func resumeCmd(uuid, cwd string) tea.Cmd {
+	c := exec.Command("claude", "--resume", uuid)
+	c.Dir = cwd
+	c.Env = os.Environ()
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return resumeDoneMsg{uuid: uuid, err: err}
+	})
 }

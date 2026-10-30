@@ -182,6 +182,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(loadActiveListCmd(), activeTickCmd())
 
+	case focusDoneMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("focus %s: %v", shortUUID(msg.uuid), msg.err)
+		} else {
+			m.status = fmt.Sprintf("focused %s", shortUUID(msg.uuid))
+		}
+		return m, nil
+
+	case resumeDoneMsg:
+		// On return from `claude --resume`, refresh everything that
+		// might have changed while the TUI was suspended: the active
+		// set (for markers) and the active list (if we're in :active).
+		cmds := []tea.Cmd{loadActiveCmd()}
+		if m.view == viewActive {
+			cmds = append(cmds, loadActiveListCmd())
+		}
+		// The session that we just left may have grown; reload it too.
+		if dir := m.currentProjectDir(); dir != "" {
+			m.sessionsLoading = true
+			cmds = append(cmds, loadSessionsCmd(dir))
+			m.sessionsFor = "" // force the matcher to accept the next load
+		}
+		if msg.err != nil {
+			m.status = fmt.Sprintf("resume %s: %v", shortUUID(msg.uuid), msg.err)
+		} else {
+			m.status = fmt.Sprintf("resumed %s — back from claude", shortUUID(msg.uuid))
+		}
+		return m, tea.Batch(cmds...)
+
 	case tea.KeyMsg:
 		if m.cmdMode {
 			return m.updateCmdMode(msg)
@@ -233,6 +262,10 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.jumpCursor(0)
 	case "G", "end":
 		return m.jumpCursor(-1) // -1 → last
+
+	// Enter: context-dependent action per view.
+	case "enter":
+		return m.enterAction()
 
 	// Pane resize. +/- grow or shrink the top row; </> shift the
 	// PROJECTS vs SESSIONS boundary within the top row.
@@ -297,6 +330,72 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 		m.status = fmt.Sprintf("unknown command: :%s", cmd)
 		return m, nil
 	}
+}
+
+// enterAction routes the Enter key per view:
+//   :projects → switch to :sessions (next natural step in the drill-down)
+//   :sessions → focus if the session has a running process, resume via
+//               tea.ExecProcess if not, status-hint if archived
+//   :active   → focus the row's UUID (every row is running by definition)
+func (m Model) enterAction() (tea.Model, tea.Cmd) {
+	switch m.view {
+	case viewProjects:
+		return m.switchView(viewSessions)
+
+	case viewSessions:
+		if m.sessionCursor < 0 || m.sessionCursor >= len(m.sessions) {
+			return m, nil
+		}
+		r := m.sessions[m.sessionCursor]
+		if r.Archived {
+			m.status = fmt.Sprintf("archived — restore first: ccctl restore %s", r.UUID)
+			return m, nil
+		}
+		if m.activeSet.Confident[r.UUID] || m.activeSet.Guessed[r.UUID] {
+			m.status = fmt.Sprintf("focusing %s…", shortUUID(r.UUID))
+			return m, focusCmd(r.UUID)
+		}
+		cwd := m.resolveResumeCwd(r)
+		if cwd == "" {
+			m.status = fmt.Sprintf("no cwd known for %s; resume manually (cd <dir> && claude --resume %s)", shortUUID(r.UUID), r.UUID)
+			return m, nil
+		}
+		return m, resumeCmd(r.UUID, cwd)
+
+	case viewActive:
+		if m.activeCursor < 0 || m.activeCursor >= len(m.active) {
+			return m, nil
+		}
+		p := m.active[m.activeCursor]
+		if p.UUID == "" {
+			m.status = fmt.Sprintf("no uuid known for pid %d; cannot focus", p.PID)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("focusing %s…", shortUUID(p.UUID))
+		return m, focusCmd(p.UUID)
+	}
+	return m, nil
+}
+
+// resolveResumeCwd finds the real working directory to run
+// `claude --resume` from. Prefers the session's own last-known cwd
+// (last-wins from the .jsonl), falling back to the project's decoded
+// cwd. Returns "" when neither is available.
+func (m Model) resolveResumeCwd(r session.Row) string {
+	if r.Meta.Cwd != "" {
+		return r.Meta.Cwd
+	}
+	if m.projectCursor >= 0 && m.projectCursor < len(m.projects) {
+		return m.projects[m.projectCursor].Cwd
+	}
+	return ""
+}
+
+func shortUUID(u string) string {
+	if len(u) >= 8 {
+		return u[:8]
+	}
+	return u
 }
 
 // switchView moves to v. Entering :active kicks off an immediate load
