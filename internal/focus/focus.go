@@ -6,6 +6,7 @@ package focus
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -159,32 +160,134 @@ func focusITerm2(pid int) error {
 	if err != nil {
 		return err
 	}
-	// Per-window / per-tab `try` blocks: iTerm2's `tabs of w` and
-	// `sessions of t` are lazily enumerated and sometimes report counts
-	// that don't match the addressable items (closed splits, zombie
-	// panes). Without the try, a successful match + return still leaves
-	// osascript surfacing the deferred index error from the next
-	// iteration cycle.
+	if os.Getenv("CCCTL_FOCUS_DEBUG") != "" {
+		return focusITerm2Debug(tty)
+	}
+	// Enumerate everything by numeric index, with a try around each
+	// per-session tty read. `repeat with s in sessions of t` throws
+	// "Can't get tty" the moment it hits a session in a weird transient
+	// state and that error aborts the whole tab's enumeration — so a
+	// match sitting AFTER the broken session never gets seen. Per-index
+	// access with a per-session try keeps every session addressable.
+	//
+	// Capture the matched window as `id of w` (not the loop variable w,
+	// which is a positional "item N of every window" reference that
+	// iTerm2 refuses to resolve outside the enumeration — "Invalid
+	// index" on tab lookups). Re-fetch via `window id tgtWinID` for the
+	// three selects.
 	script := `tell application "iTerm2"
     activate
+    set tgtWinID to missing value
+    set tgtTabIdx to 0
+    set tgtSesIdx to 0
     repeat with w in windows
+        set tabCount to 0
         try
-            repeat with t in tabs of w
-                try
-                    repeat with s in sessions of t
-                        if tty of s is "` + tty + `" then
-                            select w
-                            select t
-                            select s
-                            return
-                        end if
-                    end repeat
-                end try
-            end repeat
+            set tabCount to count of tabs of w
         end try
+        repeat with tabIdx from 1 to tabCount
+            set sesCount to 0
+            try
+                set sesCount to count of sessions of tab tabIdx of w
+            end try
+            repeat with sesIdx from 1 to sesCount
+                set sTTY to ""
+                try
+                    set sTTY to tty of session sesIdx of tab tabIdx of w
+                end try
+                if sTTY is "` + tty + `" then
+                    set tgtWinID to id of w
+                    set tgtTabIdx to tabIdx
+                    set tgtSesIdx to sesIdx
+                    exit repeat
+                end if
+            end repeat
+            if tgtWinID is not missing value then exit repeat
+        end repeat
+        if tgtWinID is not missing value then exit repeat
     end repeat
+    if tgtWinID is not missing value then
+        try
+            tell window id tgtWinID
+                select
+                tell tab tgtTabIdx
+                    select
+                    tell session tgtSesIdx
+                        select
+                    end tell
+                end tell
+            end tell
+        end try
+    end if
 end tell`
 	return runOsascript(script)
+}
+
+// focusITerm2Debug runs the same enumeration but returns a verbose
+// report instead of silently failing. Enabled via CCCTL_FOCUS_DEBUG=1
+// so an operator can see exactly which window / tab / session matched
+// and whether each select succeeded or threw. The 'error' return
+// carries the report as a string so the CLI prints it.
+func focusITerm2Debug(tty string) error {
+	script := `tell application "iTerm2"
+    activate
+    set rep to "START tty=` + tty + `"
+    set winIdx to 0
+    repeat with w in windows
+        set winIdx to winIdx + 1
+        set tabCount to 0
+        try
+            set tabCount to count of tabs of w
+        end try
+        set rep to rep & " | win=" & winIdx & " tabs=" & tabCount
+        repeat with tabIdx from 1 to tabCount
+            set sesCount to 0
+            try
+                set sesCount to count of sessions of tab tabIdx of w
+            end try
+            set triedTTYs to ""
+            repeat with sesIdx from 1 to sesCount
+                set sTTY to "?"
+                try
+                    set sTTY to tty of session sesIdx of tab tabIdx of w
+                end try
+                set triedTTYs to triedTTYs & sTTY & ","
+                if sTTY is "` + tty + `" then
+                    set winID to id of w
+                    set rep to rep & " | MATCH win=" & winIdx & " winID=" & winID & " tab=" & tabIdx & " ses=" & sesIdx
+                    try
+                        tell window id winID to select
+                        set rep to rep & " / selW ok"
+                    on error e1
+                        set rep to rep & " / selW err: " & e1
+                    end try
+                    try
+                        tell window id winID to tell tab tabIdx to select
+                        set rep to rep & " / selT ok"
+                    on error e2
+                        set rep to rep & " / selT err: " & e2
+                    end try
+                    try
+                        tell window id winID to tell tab tabIdx to tell session sesIdx to select
+                        set rep to rep & " / selS ok"
+                    on error e3
+                        set rep to rep & " / selS err: " & e3
+                    end try
+                    return rep
+                end if
+            end repeat
+            set rep to rep & " | tab=" & tabIdx & " tried=" & triedTTYs
+        end repeat
+    end repeat
+    return rep & " | NO MATCH"
+end tell`
+	cmd := exec.Command("osascript", "-e", script)
+	out, err := cmd.CombinedOutput()
+	report := strings.TrimSpace(string(out))
+	if err != nil {
+		return fmt.Errorf("osascript (debug): %w — %s", err, report)
+	}
+	return fmt.Errorf("DEBUG: %s", report)
 }
 
 func focusTerminalApp(pid int) error {
