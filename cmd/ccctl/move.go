@@ -28,7 +28,10 @@ By default, <session-id> is looked up anywhere under
 ~/.claude/projects/, and tab completion offers only sessions in the
 project namespace for the current directory. Pass --from <dir> to
 scope BOTH completion and the lookup to that directory's namespace;
-the move then fails cleanly if <session-id> is not there.
+the move then fails cleanly if <session-id> is not there. Use the
+--from=<dir> form (with =) for tab-completion to list session IDs
+reliably — cobra's zsh completion filters out candidates behind the
+space-separated form.
 
 After the move, consider running /post-session-move-memory in the
 resumed session to reconcile any memory writes made in the old project's
@@ -46,6 +49,30 @@ func init() {
 	})
 }
 
+// resolveScopeDir normalises a user-supplied directory to its realpath,
+// handling tilde expansion (shells don't expand ~ inside a flag value)
+// and relative paths. Empty input returns the realpath of $PWD.
+func resolveScopeDir(dir string) (string, error) {
+	if dir == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", err
+		}
+		dir = wd
+	} else if dir == "~" || strings.HasPrefix(dir, "~/") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", err
+		}
+		dir = filepath.Join(home, strings.TrimPrefix(dir, "~"))
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(abs)
+}
+
 // moveCompleter completes the session-id positional from sessions
 // stored under the scope project namespace (default: realpath($PWD),
 // override: --from <dir>). The target-dir positional falls through to
@@ -60,15 +87,7 @@ func moveCompleter(cmd *cobra.Command, args []string, toComplete string) ([]stri
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 
-	scopeDir := moveFromDir
-	if scopeDir == "" {
-		wd, err := os.Getwd()
-		if err != nil {
-			return nil, cobra.ShellCompDirectiveNoFileComp
-		}
-		scopeDir = wd
-	}
-	real, err := filepath.EvalSymlinks(scopeDir)
+	real, err := resolveScopeDir(moveFromDir)
 	if err != nil {
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
@@ -134,11 +153,7 @@ func runMove(cmd *cobra.Command, args []string) error {
 
 	var sourceFile string
 	if moveFromDir != "" {
-		absFrom, err := filepath.Abs(moveFromDir)
-		if err != nil {
-			return err
-		}
-		realFrom, err := filepath.EvalSymlinks(absFrom)
+		realFrom, err := resolveScopeDir(moveFromDir)
 		if err != nil {
 			return fmt.Errorf("resolve --from dir: %w", err)
 		}
