@@ -1,9 +1,5 @@
 // Command ccctl is a personal toolkit for inspecting and operating on
 // Claude Code sessions and the local project namespaces that hold them.
-//
-// Supersedes an earlier shell implementation; the companion claude.zsh
-// keeps the original claude-* command names as thin shims that call this
-// binary.
 package main
 
 import (
