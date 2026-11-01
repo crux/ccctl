@@ -30,7 +30,7 @@ ccctl find "rate limit"
 `find` searches every conversation in every project. My 1.5 GB, 8 months
 of work, complete search in about a second (faster soon).
 
-## All of it in one place
+## Or all of it in one place
 
 ![ccctl ui: browse projects and sessions, resume one, jump to a running one](docs/demo/ui.gif)
 
@@ -39,7 +39,9 @@ ccctl ui
 ```
 
 `ccctl ui` shows all projects, all sessions and the running ones on one
-screen. Enter resumes a session, or jumps to it while it runs.
+screen. Enter resumes a session, or jumps to it while it runs. I really
+like [k9s](https://k9scli.io), so `ccctl ui` works the same way, with
+`:views`, `j`/`k` and Enter.
 Next: search as you type, right in `ccctl ui`.
 
 ## Move and rename
