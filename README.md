@@ -1,28 +1,60 @@
 # ccctl
 
-ccctl is a command line tool and a TUI for the Claude Code sessions on
-your Mac. It lists, searches, archives and moves sessions. It also
-renames a project directory and takes its Claude Code history along.
+**Find, jump into and search your Claude Code sessions.**
+Unofficial, not affiliated with Anthropic.
 
-ccctl is an unofficial tool and is not affiliated with Anthropic. It
-reads files that Claude Code writes under `~/.claude/`. Anthropic does
-not document these files, so a Claude Code update can change them.
-ccctl is tested with Claude Code 2.1.316 on macOS 27.
+![ccctl ps lists the running sessions; ccctl focus with tab completion jumps into one](docs/demo/hero.gif)
 
-## Commands
+```sh
+brew install crux/tap/ccctl
+```
 
-| Command | What it does |
+## Where was that session?
+
+```sh
+ccctl ps            # every running Claude Code session
+ccctl focus <Tab>   # pick one by its title, land in its terminal
+```
+
+`focus` brings the session to the front: the iTerm2 tab, the
+Terminal.app window or the tmux pane.
+
+## Search every conversation
+
+![ccctl status shows 448 sessions and 925 MB; ccctl find searches all of them in a third of a second](docs/demo/find.gif)
+
+```sh
+ccctl find "rate limit"
+```
+
+## All of it in one place
+
+![ccctl ui: browse projects and sessions, resume one, jump to a running one](docs/demo/ui.gif)
+
+```sh
+ccctl ui
+```
+
+Enter resumes a session, or jumps to it while it runs.
+Next: search as you type, right in `ccctl ui`.
+
+## Move and rename
+
+```sh
+ccctl move <session> <dir>    # a session into another project
+ccctl move <dir> <new-path>   # a directory, with its sessions, memory, settings and prompt history
+```
+
+`--dry-run` shows the plan first.
+
+## And more
+
+| | |
 |---|---|
-| `ccctl`, `ccctl status [dir]` | overview of the local Claude Code state |
-| `ccctl ps` | running Claude Code processes and their sessions |
-| `ccctl projects` | project folders under `~/.claude/projects/`, newest first |
-| `ccctl sessions [dir]` | sessions of a project directory, newest first |
-| `ccctl find <pattern>` | search the text of all conversations |
-| `ccctl focus <session>` | bring the terminal of a running session to the front (iTerm2, Terminal.app, tmux) |
-| `ccctl move <session> <dir>` | move one session to another project |
-| `ccctl move <dir> <new-path>` | rename a directory and take its Claude Code state along |
-| `ccctl archive <session>` | pack a session into a `.zip`; `ccctl restore` unpacks it |
-| `ccctl ui` | TUI for projects, sessions and running processes |
+| `ccctl status` | projects, sessions, size at a glance |
+| `ccctl sessions [dir]` | the sessions of a directory |
+| `ccctl projects` | every project folder |
+| `ccctl archive`, `ccctl restore` | pack a session into a `.zip`, and back |
 
 `ccctl <command> --help` shows the details.
 
@@ -36,7 +68,7 @@ Most commands only read. These commands change files:
   It copies the directory's settings in `~/.claude.json` and changes the
   project path in `~/.claude/history.jsonl`. It edits both files under
   Claude Code's own file lock. It refuses while Claude Code runs inside
-  the directory. `--dry-run` shows the plan and changes nothing.
+  the directory.
 - `archive` packs a session into `<session>.zip`. It checks the archive
   before it removes the original files. `restore` unpacks it again.
 
@@ -122,7 +154,9 @@ The repository holds the source. Change the command here, then run
 
 ## Platform support
 
-ccctl runs on macOS.
+ccctl runs on macOS. It reads the files that Claude Code writes under
+`~/.claude/`. Anthropic does not document them, so a Claude Code update
+can change them. Tested with Claude Code 2.1.316 on macOS 27.
 
 **Linux: not released yet.** Most commands read files that Claude Code
 writes in the same way on every platform, so they should work. Three
@@ -146,6 +180,7 @@ make help     # list the targets
 make build    # bin/ccctl for this machine
 make check    # go vet, tests, gofmt
 make install  # the dev build into $(go env GOPATH)/bin
+make demo     # render the GIFs in docs/demo/ (Docker; made-up sessions)
 ```
 
 A dev build reports a Go pseudo-version: the last release, the commit

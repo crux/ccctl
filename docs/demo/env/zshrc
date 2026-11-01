@@ -1,0 +1,7 @@
+# zsh setup for the demo shell (ZDOTDIR=/demo, file copied to .zshrc).
+PROMPT='%F{110}%~%f %F{176}$%f '
+autoload -Uz compinit && compinit -u
+zstyle ':completion:*' menu select
+zstyle ':completion:*' list-colors ''
+source <(ccctl completion zsh)
+TIMEFMT=$'%*E s'

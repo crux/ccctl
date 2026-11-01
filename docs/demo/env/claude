@@ -1,0 +1,26 @@
+#!/bin/bash
+# Stand-in for Claude Code in the ccctl demos. The file is named
+# `claude`, so `ps` shows a process named claude. It draws a session
+# screen and then waits.
+#   claude                       a running session (title from CLAUDE_DEMO_TITLE)
+#   claude --resume <session>    a resumed session; Enter returns
+title=${CLAUDE_DEMO_TITLE:-}
+resumed=
+if [ "${1:-}" = "--resume" ]; then
+	resumed=1
+	title=$(grep -h '"aiTitle"' "$HOME"/.claude/projects/*/"$2".jsonl 2>/dev/null | tail -1 | sed 's/.*"aiTitle":"\([^"]*\)".*/\1/')
+fi
+
+clear
+printf '\n  \033[38;5;173m*\033[0m \033[1mclaude\033[0m   \033[38;5;110m%s\033[0m\n' "${PWD/#"$HOME"/\~}"
+printf '  \033[38;5;250m%s\033[0m\n' "$title"
+if [ -n "$resumed" ]; then
+	printf '  \033[38;5;108mresumed\033[0m\n'
+fi
+printf '\n  \033[38;5;244m>\033[0m '
+
+if [ -n "$resumed" ]; then
+	read -r _
+	exit 0
+fi
+while :; do sleep 3600; done

@@ -45,6 +45,9 @@ test-real: ## read-only: check that edits round-trip the real ~/.claude.json and
 clean: ## remove build output
 	rm -rf bin dist
 
+demo: ## render the README demos (docs/demo/*.gif) in Docker; TAPES="hero.tape …" for some
+	bash scripts/demo.sh $(TAPES)
+
 claude-install: ## copy the Claude Code commands into ~/.claude/commands
 	bash scripts/claude.sh install
 
@@ -68,4 +71,4 @@ publish: require-version ## create the GitHub release from dist/ (CI)
 tap: require-version ## write the Homebrew formula and push it to the tap (CI)
 	bash scripts/tap.sh "$(VERSION)"
 
-.PHONY: help build install check vet test fmt-check fmt tidy test-real clean claude-install claude-check require-version release dist publish tap
+.PHONY: help build install check vet test fmt-check fmt tidy test-real clean demo claude-install claude-check require-version release dist publish tap
