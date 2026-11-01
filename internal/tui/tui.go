@@ -54,6 +54,7 @@ type Model struct {
 
 	// Data + cursors
 	includeTmp      bool
+	includeArchived bool // when true, .zip rows appear in the sessions pane
 	projects        []project.Info
 	projectCursor   int
 	projectsLoading bool
@@ -190,6 +191,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case archiveDoneMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("archive %s: %v", shortUUID(msg.uuid), msg.err)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("archived %s", shortUUID(msg.uuid))
+		return m, m.reloadSessions()
+
+	case restoreDoneMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("restore %s: %v", shortUUID(msg.uuid), msg.err)
+			return m, nil
+		}
+		m.status = fmt.Sprintf("restored %s", shortUUID(msg.uuid))
+		return m, m.reloadSessions()
+
 	case resumeDoneMsg:
 		// On return from `claude --resume`, refresh everything that
 		// might have changed while the TUI was suspended: the active
@@ -199,10 +216,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, loadActiveListCmd())
 		}
 		// The session that we just left may have grown; reload it too.
-		if dir := m.currentProjectDir(); dir != "" {
-			m.sessionsLoading = true
-			cmds = append(cmds, loadSessionsCmd(dir))
-			m.sessionsFor = "" // force the matcher to accept the next load
+		if cmd := m.reloadSessions(); cmd != nil {
+			cmds = append(cmds, cmd)
 		}
 		if msg.err != nil {
 			m.status = fmt.Sprintf("resume %s: %v", shortUUID(msg.uuid), msg.err)
@@ -266,6 +281,14 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// Enter: context-dependent action per view.
 	case "enter":
 		return m.enterAction()
+
+	// Session-row actions (`:sessions` only).
+	case "A":
+		return m.toggleIncludeArchived()
+	case "a":
+		return m.archiveAction()
+	case "r":
+		return m.restoreAction()
 
 	// Pane resize. +/- grow or shrink the top row; </> shift the
 	// PROJECTS vs SESSIONS boundary within the top row.
@@ -375,6 +398,62 @@ func (m Model) enterAction() (tea.Model, tea.Cmd) {
 		return m, focusCmd(p.UUID)
 	}
 	return m, nil
+}
+
+// toggleIncludeArchived flips whether .zip rows show in the sessions
+// pane and reloads the current project's sessions. Only meaningful in
+// :sessions / :projects; silent elsewhere.
+func (m Model) toggleIncludeArchived() (tea.Model, tea.Cmd) {
+	if m.view != viewProjects && m.view != viewSessions {
+		return m, nil
+	}
+	m.includeArchived = !m.includeArchived
+	label := "hidden"
+	if m.includeArchived {
+		label = "shown"
+	}
+	m.status = fmt.Sprintf("archived: %s", label)
+	return m, m.reloadSessions()
+}
+
+// archiveAction archives the session under the sessions cursor. Only
+// meaningful in :sessions. Refuses active or already-archived rows.
+func (m Model) archiveAction() (tea.Model, tea.Cmd) {
+	if m.view != viewSessions {
+		return m, nil
+	}
+	if m.sessionCursor < 0 || m.sessionCursor >= len(m.sessions) {
+		return m, nil
+	}
+	r := m.sessions[m.sessionCursor]
+	if r.Archived {
+		m.status = fmt.Sprintf("already archived: %s", shortUUID(r.UUID))
+		return m, nil
+	}
+	if m.activeSet.Confident[r.UUID] || m.activeSet.Guessed[r.UUID] {
+		m.status = fmt.Sprintf("active — cannot archive %s", shortUUID(r.UUID))
+		return m, nil
+	}
+	m.status = fmt.Sprintf("archiving %s…", shortUUID(r.UUID))
+	return m, archiveCmd(r.UUID)
+}
+
+// restoreAction restores the archived session under the sessions
+// cursor. Only meaningful in :sessions on a .zip row.
+func (m Model) restoreAction() (tea.Model, tea.Cmd) {
+	if m.view != viewSessions {
+		return m, nil
+	}
+	if m.sessionCursor < 0 || m.sessionCursor >= len(m.sessions) {
+		return m, nil
+	}
+	r := m.sessions[m.sessionCursor]
+	if !r.Archived {
+		m.status = fmt.Sprintf("not archived: %s", shortUUID(r.UUID))
+		return m, nil
+	}
+	m.status = fmt.Sprintf("restoring %s…", shortUUID(r.UUID))
+	return m, restoreCmd(r.UUID)
 }
 
 // resolveResumeCwd finds the real working directory to run
@@ -489,7 +568,20 @@ func (m *Model) loadSessionsForCursor() tea.Cmd {
 	}
 	m.sessionsLoading = true
 	m.sessionCursor = 0
-	return loadSessionsCmd(dir)
+	return loadSessionsCmd(dir, m.includeArchived)
+}
+
+// reloadSessions forces a reload of the current project's sessions,
+// bypassing the sessionsFor shortcut. Used after a mutation (archive /
+// restore) or a toggle flip changed what should be in the list.
+func (m *Model) reloadSessions() tea.Cmd {
+	dir := m.currentProjectDir()
+	if dir == "" {
+		return nil
+	}
+	m.sessionsLoading = true
+	m.sessionsFor = ""
+	return loadSessionsCmd(dir, m.includeArchived)
 }
 
 // currentProjectDir returns the Dir of the project under the cursor, or

@@ -78,7 +78,7 @@ func (m Model) View() string {
 
 func (m Model) header() string {
 	title := fmt.Sprintf(" ccctl ui — :%s", m.view.label())
-	hint := "  (1/2/3 view · tab/h/l switch · j/k move · enter act · +/- </> resize · : cmd · q quit)"
+	hint := "  (1/2/3 view · tab/h/l switch · j/k move · enter act · a archive · r restore · A show-arc · +/- </> resize · : cmd · q quit)"
 	line := headerStyle.Render(title) + footerStyle.Render(hint)
 	return padLine(line, m.width)
 }
@@ -284,7 +284,16 @@ func (m Model) renderProjectsPane(w, h int) string {
 
 func (m Model) renderSessionsPane(w, h int) string {
 	count := len(m.sessions)
+	arcCount := 0
+	for _, r := range m.sessions {
+		if r.Archived {
+			arcCount++
+		}
+	}
 	title := m.paneTitle("SESSIONS", m.sessionCursor, count, m.sessionsLoading)
+	if m.includeArchived && arcCount > 0 {
+		title = title + paneSubStyle.Render(fmt.Sprintf(" · %d arc", arcCount))
+	}
 	rowCap := h - 2
 	if rowCap < 1 {
 		rowCap = 1

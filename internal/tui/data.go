@@ -7,6 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/crux/ccctl/internal/archive"
 	"github.com/crux/ccctl/internal/focus"
 	"github.com/crux/ccctl/internal/proc"
 	"github.com/crux/ccctl/internal/project"
@@ -60,11 +61,11 @@ func loadProjectsCmd(includeTmp bool) tea.Cmd {
 	}
 }
 
-// loadSessionsCmd lists sessions for projectDir. Live sessions only for
-// now; the archived toggle lives with the tmp toggle in a later step.
-func loadSessionsCmd(projectDir string) tea.Cmd {
+// loadSessionsCmd lists sessions for projectDir. includeArchived
+// controls whether .zip archives also appear in the list.
+func loadSessionsCmd(projectDir string, includeArchived bool) tea.Cmd {
 	return func() tea.Msg {
-		rows, err := session.ListInProject(projectDir, false)
+		rows, err := session.ListInProject(projectDir, includeArchived)
 		return sessionsLoadedMsg{projectDir: projectDir, rows: rows, err: err}
 	}
 }
@@ -134,4 +135,33 @@ func resumeCmd(uuid, cwd string) tea.Cmd {
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return resumeDoneMsg{uuid: uuid, err: err}
 	})
+}
+
+// archiveDoneMsg carries the result of an archive attempt so the TUI
+// can surface outcome + reload the sessions list.
+type archiveDoneMsg struct {
+	uuid string
+	path string // archive path on success
+	err  error
+}
+
+func archiveCmd(uuid string) tea.Cmd {
+	return func() tea.Msg {
+		res, err := archive.ArchiveSession(uuid)
+		return archiveDoneMsg{uuid: uuid, path: res.ArchivePath, err: err}
+	}
+}
+
+// restoreDoneMsg carries the result of a restore attempt.
+type restoreDoneMsg struct {
+	uuid string
+	path string // restored jsonl path on success
+	err  error
+}
+
+func restoreCmd(uuid string) tea.Cmd {
+	return func() tea.Msg {
+		res, err := archive.RestoreSession(uuid)
+		return restoreDoneMsg{uuid: uuid, path: res.JSONLPath, err: err}
+	}
 }
