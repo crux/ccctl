@@ -27,6 +27,19 @@ func EncodePath(dir string) string {
 	}, dir)
 }
 
+// ExpandHome replaces a leading "~" or "~/" with the user's home
+// directory. Shells do not expand ~ inside flag values or quotes.
+func ExpandHome(p string) (string, error) {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, strings.TrimPrefix(p, "~")), nil
+}
+
 // Dir returns the ~/.claude/projects/<encoded> directory for a given
 // working directory. Returns "" if the user home cannot be resolved.
 func Dir(dir string) string {

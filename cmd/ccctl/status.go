@@ -299,16 +299,11 @@ func titleForFile(path string) string {
 		return "(no title)"
 	}
 	uuid := strings.TrimSuffix(filepath.Base(path), ".jsonl")
-	if ps, _ := proc.FindPIDBySessionID(uuid); ps != nil && ps.Name != "" {
-		return ps.Name
+	if ps, _ := proc.FindPIDBySessionID(uuid); ps != nil && ps.Title() != "" {
+		return ps.Title()
 	}
-	if meta, err := session.ReadMeta(path); err == nil {
-		if meta.CustomTitle != "" {
-			return meta.CustomTitle
-		}
-		if meta.Summary != "" {
-			return meta.Summary
-		}
+	if meta, err := session.ReadMeta(path); err == nil && meta.Title() != "" {
+		return meta.Title()
 	}
 	return "(no title)"
 }

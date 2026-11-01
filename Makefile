@@ -7,7 +7,7 @@ BINARY := ccctl
 CMD    := ./cmd/$(BINARY)
 COMPLETION_DIR ?= $(HOME)/.oh-my-zsh/completions
 
-.PHONY: help build install completions test fmt vet tidy clean
+.PHONY: help build install completions test test-real fmt vet tidy clean
 
 help: ## list targets
 	@awk 'BEGIN{FS=":.*##"} /^[a-zA-Z_-]+:.*##/{printf "  %-10s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -31,6 +31,9 @@ completions: ## write zsh completion to $(COMPLETION_DIR)/_$(BINARY)
 
 test: ## run go test
 	go test ./...
+
+test-real: ## read-only: check that edits round-trip the real ~/.claude.json and history.jsonl
+	CCCTL_REAL_FILES=1 go test -count=1 -run TestRealFilesRoundTrip -v ./internal/claudestate/
 
 fmt: ## gofmt the tree
 	gofmt -w .

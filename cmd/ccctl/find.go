@@ -135,21 +135,16 @@ func runFind(cmd *cobra.Command, args []string) error {
 
 func enrichHit(h *search.Hit) {
 	if ps, _ := proc.FindPIDBySessionID(h.UUID); ps != nil {
-		if ps.Name != "" {
-			h.Title = ps.Name
+		if t := ps.Title(); t != "" {
+			h.Title = t
 		}
 		if ps.Cwd != "" {
 			h.ProjectDir = ps.Cwd
 		}
-		return
 	}
 	if h.Title == "" && h.Path != "" {
 		if meta, err := session.ReadMeta(h.Path); err == nil {
-			if meta.CustomTitle != "" {
-				h.Title = meta.CustomTitle
-			} else if meta.Summary != "" {
-				h.Title = meta.Summary
-			}
+			h.Title = meta.Title()
 		}
 	}
 }

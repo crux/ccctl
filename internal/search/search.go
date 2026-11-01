@@ -212,6 +212,7 @@ func scanFile(path string, re *regexp.Regexp, opts Opts) (*Hit, error) {
 	buf := make([]byte, 0, 1024*1024)
 	scanner.Buffer(buf, 16*1024*1024)
 
+	haveCustom := false
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if !re.Match(line) {
@@ -220,6 +221,7 @@ func scanFile(path string, re *regexp.Regexp, opts Opts) (*Hit, error) {
 		var entry struct {
 			Type        string `json:"type"`
 			CustomTitle string `json:"customTitle"`
+			AITitle     string `json:"aiTitle"`
 			Message     *struct {
 				Role    string          `json:"role"`
 				Content json.RawMessage `json:"content"`
@@ -231,8 +233,13 @@ func scanFile(path string, re *regexp.Regexp, opts Opts) (*Hit, error) {
 		// Keep the latest custom-title we see (sessions.go uses the
 		// JSON side-car; here we fall back to .jsonl for titles the
 		// side-car doesn't have, e.g. closed sessions).
+		// A custom title wins over any AI title, as in Claude Code.
 		if entry.Type == "custom-title" && entry.CustomTitle != "" {
 			hit.Title = entry.CustomTitle
+			haveCustom = true
+		}
+		if entry.Type == "ai-title" && entry.AITitle != "" && !haveCustom {
+			hit.Title = entry.AITitle
 		}
 		if entry.Message == nil {
 			continue

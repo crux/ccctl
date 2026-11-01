@@ -24,12 +24,25 @@ import (
 // are both subject to drift (compaction, /clear, etc. can replace the
 // session UUID without the process restarting).
 type PIDSession struct {
-	PID       int    `json:"pid"`
-	SessionID string `json:"sessionId"`
-	Cwd       string `json:"cwd"`
-	Version   string `json:"version"`
-	Name      string `json:"name"`
-	Status    string `json:"status"` // "idle" / "busy" / ""
+	PID        int    `json:"pid"`
+	SessionID  string `json:"sessionId"`
+	Cwd        string `json:"cwd"`
+	Version    string `json:"version"`
+	Name       string `json:"name"`
+	NameSource string `json:"nameSource"` // "user" (set by /rename) or "derived"
+	Status     string `json:"status"`     // "idle" / "busy" / ""
+}
+
+// Title returns the session name when it is a real title. A "derived"
+// name is a placeholder Claude Code builds from the directory name
+// (e.g. "claude-scripts-42"); it is not a title, so Title returns "".
+// A name set by /rename is also in the .jsonl as custom-title, but the
+// live record can be newer than the file.
+func (p PIDSession) Title() string {
+	if p.NameSource == "derived" {
+		return ""
+	}
+	return p.Name
 }
 
 // ReadPIDSession reads ~/.claude/sessions/<pid>.json. Returns a wrapped
@@ -186,7 +199,7 @@ func ListClaudeProcesses() ([]Info, error) {
 				Cwd:         ps.Cwd,
 				UUID:        ps.SessionID,
 				SessionFile: project.SessionFile(ps.Cwd, ps.SessionID),
-				Title:       ps.Name,
+				Title:       ps.Title(),
 				Status:      ps.Status,
 			})
 			continue
