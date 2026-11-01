@@ -44,9 +44,9 @@ ccctl move <session-id> <dir>
   reliably — cobra's zsh completion filters out candidates behind the
   space-separated form.
 
-  After the move, consider running /post-session-move-memory in the
-  resumed session to reconcile any memory writes made in the old
-  project's namespace.
+  Memory files that the session wrote stay in the old project's
+  memory/ folder. After the move, copy the ones that belong to the new
+  project.
 
 ccctl move <dir> <new-path>
 
@@ -434,8 +434,8 @@ func runSessionMove(sessionID, targetDir string) error {
 	fmt.Println()
 	fmt.Printf("cd %q && claude --continue\n", realTarget)
 	fmt.Println()
-	fmt.Println("If this session wrote memory in the old project's namespace, run")
-	fmt.Println("  /post-session-move-memory")
-	fmt.Println("after resuming to reconcile.")
+	fmt.Println("Memory files this session wrote stay in the old project's folder:")
+	fmt.Printf("  %s\n", filepath.Join(sourceDir, "memory"))
+	fmt.Println("Copy the ones that belong to the new project.")
 	return nil
 }

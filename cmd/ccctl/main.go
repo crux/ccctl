@@ -1,5 +1,6 @@
-// Command ccctl is a personal toolkit for inspecting and operating on
-// Claude Code sessions and the local project namespaces that hold them.
+// Command ccctl inspects and operates on Claude Code sessions and the
+// local project folders that hold them. It is an unofficial tool, not
+// affiliated with Anthropic.
 package main
 
 import (
@@ -11,9 +12,10 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "ccctl",
-	Short: "Personal toolkit for Claude Code session management",
+	Short: "Inspect and manage Claude Code sessions and project folders",
 	Long: `ccctl inspects and operates on Claude Code sessions stored under
-~/.claude/projects/<encoded-project>/.
+~/.claude/projects/<encoded-project>/. It is an unofficial tool, not
+affiliated with Anthropic.
 
 With no subcommand, prints the same overview as 'ccctl status'. Use
 'ccctl --help' or 'ccctl <subcommand> --help' for the full

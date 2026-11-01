@@ -330,10 +330,11 @@ func appendRing(ring []Snippet, s Snippet, capN int) []Snippet {
 // Collapses runs of whitespace to single spaces and ellipsises both
 // sides if content extended beyond the window. Snippet boundaries are
 // adjusted to:
-//   1. the nearest WORD boundary (whitespace), within a 15-char budget,
-//      so we don't cut mid-word;
-//   2. the nearest UTF-8 rune boundary, so multi-byte runes aren't
-//      sliced in half (which would otherwise produce U+FFFD chars).
+//  1. the nearest WORD boundary (whitespace), within a 15-char budget,
+//     so we don't cut mid-word;
+//  2. the nearest UTF-8 rune boundary, so multi-byte runes aren't
+//     sliced in half (which would otherwise produce U+FFFD chars).
+//
 // Word alignment is best-effort — if no whitespace is found within the
 // budget, we fall back to the raw cut.
 func makeSnippet(text string, matchStart, matchEnd int) string {

@@ -9,6 +9,8 @@ import (
 var takeoverCmd = &cobra.Command{
 	Use:   "takeover <session-uuid>",
 	Short: "Take a running session over into the current terminal (not yet implemented)",
+	// Hidden until it is implemented: not in help, not in completion.
+	Hidden: true,
 	Long: `NOT YET IMPLEMENTED — stub for a planned future command.
 
 The intent:

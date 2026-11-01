@@ -71,10 +71,10 @@ type Model struct {
 	// while a load is in flight. activeTicking is true when the view is
 	// currently receiving 2s refreshes — gated so no work happens while
 	// the user is elsewhere.
-	active        []proc.Info
-	activeCursor  int
-	activeLoading bool
-	activeTicking bool
+	active            []proc.Info
+	activeCursor      int
+	activeLoading     bool
+	activeTicking     bool
 	activeLastRefresh time.Time
 
 	// Split ratios, percent of the available body region.
@@ -356,10 +356,11 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 }
 
 // enterAction routes the Enter key per view:
-//   :projects → switch to :sessions (next natural step in the drill-down)
-//   :sessions → focus if the session has a running process, resume via
-//               tea.ExecProcess if not, status-hint if archived
-//   :active   → focus the row's UUID (every row is running by definition)
+//
+//	:projects → switch to :sessions (next natural step in the drill-down)
+//	:sessions → focus if the session has a running process, resume via
+//	            tea.ExecProcess if not, status-hint if archived
+//	:active   → focus the row's UUID (every row is running by definition)
 func (m Model) enterAction() (tea.Model, tea.Cmd) {
 	switch m.view {
 	case viewProjects:

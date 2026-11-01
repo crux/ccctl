@@ -168,12 +168,14 @@ type Info struct {
 	Cwd         string // process working directory (absolute)
 	UUID        string // session UUID the process has open; "" if unknown
 	SessionFile string // absolute path to the .jsonl; "" if unknown
-	Title       string // session display title from PIDSession.Name; "" if
-	                   // unknown (callers may fall back to session.ReadMeta)
-	Status      string // "idle" / "busy" / "" (unknown — e.g. legacy path)
-	GuessedUUID bool   // true when UUID came from the newest-in-project-dir
-	                   // fallback; may be wrong if the project has multiple
-	                   // active sessions. Only set in the legacy path.
+	// Title is the session title from PIDSession.Title(); "" if unknown
+	// (callers may fall back to session.ReadMeta).
+	Title  string
+	Status string // "idle" / "busy" / "" (unknown — e.g. legacy path)
+	// GuessedUUID is true when UUID came from the newest-in-project-dir
+	// fallback; it may be wrong if the project has multiple active
+	// sessions. Only set in the legacy path.
+	GuessedUUID bool
 }
 
 // ListClaudeProcesses returns one entry per running `claude` process.
@@ -373,13 +375,13 @@ func IsFileOpen(path string) bool {
 // ActiveSet describes sessions currently open by any running claude
 // process, with resolution confidence and per-session status.
 //
-//   Confident — UUIDs resolved via PIDSession (authoritative) or
-//               --resume arg (legacy)
-//   Guessed   — UUIDs from the newest-in-project-dir fallback;
-//               right when one active session per project, maybe wrong
-//               with several
-//   Status    — "idle" / "busy" / "" (unknown; set only when the
-//               PIDSession path resolved the UUID)
+//	Confident — UUIDs resolved via PIDSession (authoritative) or
+//	            --resume arg (legacy)
+//	Guessed   — UUIDs from the newest-in-project-dir fallback;
+//	            right when one active session per project, maybe wrong
+//	            with several
+//	Status    — "idle" / "busy" / "" (unknown; set only when the
+//	            PIDSession path resolved the UUID)
 type ActiveSet struct {
 	Confident map[string]bool
 	Guessed   map[string]bool

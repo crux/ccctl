@@ -247,7 +247,6 @@ func formatActiveRow(p proc.Info, home string, statusW, pidW, uuidW, titleW, cwd
 		padRight(truncate(cwd, cwdW), cwdW)
 }
 
-
 // renderProjectsPane renders the PROJECTS list column in the given
 // inner size (w = content width, h = pane content height after border).
 func (m Model) renderProjectsPane(w, h int) string {

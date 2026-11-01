@@ -66,6 +66,8 @@ func init() {
 	findCmd.Flags().StringVar(&findUUID, "uuid", "", "scope to one session (UUID prefix is enough)")
 	findCmd.Flags().StringVar(&findColor, "color", "auto", "highlight matches in snippets: always|never|auto")
 	findCmd.Flags().BoolVar(&findTools, "tools", false, "also search tool_use payloads (not yet implemented)")
+	// Hidden until it is implemented.
+	_ = findCmd.Flags().MarkHidden("tools")
 }
 
 func runFind(cmd *cobra.Command, args []string) error {
@@ -150,10 +152,11 @@ func enrichHit(h *search.Hit) {
 }
 
 // Column layout constants. Data row:
-//   MTIME        col 3-18    (16 chars)
-//   M            col 21-26   (6 chars, right-aligned)
-//   PROJECT      col 29-60   (32 chars)
-//   TITLE+UUID   col 63-...  (fused: "title (uuid)", wraps freely)
+//
+//	MTIME        col 3-18    (16 chars)
+//	M            col 21-26   (6 chars, right-aligned)
+//	PROJECT      col 29-60   (32 chars)
+//	TITLE+UUID   col 63-...  (fused: "title (uuid)", wraps freely)
 //
 // Snippet cell spans PROJECT+TITLE+UUID (col 29 to terminal edge).
 // Role char at col 27 (in the pad between M and PROJECT), snippet
@@ -363,4 +366,3 @@ func truncate(s string, max int) string {
 	}
 	return s[:max-1] + "…"
 }
-

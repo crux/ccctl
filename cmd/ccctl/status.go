@@ -312,10 +312,10 @@ func titleForFile(path string) string {
 // (K/M/G/…) separated by a space, and one decimal place for values
 // below 10 of that unit. Base-1024.
 //
-//   999 bytes -> "999 B"
-//   4700 KB   -> "4.7 M"
-//   15 MB     -> "15 M"
-//   199 MB    -> "199 M"
+//	999 bytes -> "999 B"
+//	4700 KB   -> "4.7 M"
+//	15 MB     -> "15 M"
+//	199 MB    -> "199 M"
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
@@ -340,8 +340,8 @@ func humanBytes(n int64) string {
 // D is the decimal digit (blanked when the value is an integer, so
 // the "." column stays aligned), and U is the unit letter:
 //
-//   "999   B"    "4.7 M"  (within "  4.7 M")
-//   "999   M"    " 15   M"
+//	"999   B"    "4.7 M"  (within "  4.7 M")
+//	"999   M"    " 15   M"
 //
 // The decimal point always sits at column 3, the unit at column 6.
 func humanBytesCell(n int64) string {
