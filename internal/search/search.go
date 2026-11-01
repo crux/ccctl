@@ -90,11 +90,7 @@ func Search(opts Opts) ([]Hit, error) {
 		return nil, nil
 	}
 
-	flags := "(?i)"
-	if opts.CaseSensitive {
-		flags = ""
-	}
-	re, err := regexp.Compile(flags + regexp.QuoteMeta(opts.Pattern))
+	m, err := newMatcher(opts.Pattern, opts.CaseSensitive)
 	if err != nil {
 		return nil, fmt.Errorf("compile pattern: %w", err)
 	}
@@ -113,7 +109,7 @@ func Search(opts Opts) ([]Hit, error) {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			hit, err := scanFile(path, re, opts)
+			hit, err := scanFile(path, m, opts)
 			results <- result{hit, err}
 		}(p)
 	}
@@ -183,15 +179,15 @@ func enumerateSessionPaths(projectDir string) ([]string, error) {
 }
 
 // scanFile runs the two-pass search on one .jsonl: a byte-level
-// regexp.Match pre-filter, then a line-by-line pass to count matches
-// in user/assistant text and capture snippets. Returns (nil, nil) if
-// the file contains no matches in the targeted content.
-func scanFile(path string, re *regexp.Regexp, opts Opts) (*Hit, error) {
+// pre-filter over the whole file, then a line-by-line pass to count
+// matches in user/assistant text and capture snippets. Returns
+// (nil, nil) if the file contains no matches in the targeted content.
+func scanFile(path string, m *matcher, opts Opts) (*Hit, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	if !re.Match(data) {
+	if !m.contains(data) {
 		return nil, nil
 	}
 
@@ -215,7 +211,7 @@ func scanFile(path string, re *regexp.Regexp, opts Opts) (*Hit, error) {
 	haveCustom := false
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		if !re.Match(line) {
+		if !m.contains(line) {
 			continue
 		}
 		var entry struct {
@@ -249,7 +245,7 @@ func scanFile(path string, re *regexp.Regexp, opts Opts) (*Hit, error) {
 		}
 		texts := extractText(entry.Message.Content)
 		for _, text := range texts {
-			locs := re.FindAllStringIndex(text, -1)
+			locs := m.re.FindAllStringIndex(text, -1)
 			if len(locs) == 0 {
 				continue
 			}
