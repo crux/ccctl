@@ -2,11 +2,8 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 
 	"github.com/crux/ccctl/internal/archive"
-	"github.com/crux/ccctl/internal/project"
 	"github.com/spf13/cobra"
 )
 
@@ -22,32 +19,13 @@ Refuses to overwrite an existing <uuid>.jsonl.`,
 }
 
 func runRestore(cmd *cobra.Command, args []string) error {
-	sessionID := args[0]
-
-	archivePath, err := project.FindArchive(sessionID)
+	uuid := args[0]
+	res, err := archive.RestoreSession(uuid)
 	if err != nil {
 		return err
 	}
-	if archivePath == "" {
-		return fmt.Errorf("archive %s.zip not found in ~/.claude/projects/", sessionID)
-	}
-
-	sessionDir := filepath.Dir(archivePath)
-	targetFile := filepath.Join(sessionDir, sessionID+".jsonl")
-
-	if _, err := os.Stat(targetFile); err == nil {
-		return fmt.Errorf("%s already exists; refusing to overwrite", targetFile)
-	}
-
-	if err := archive.Extract(archivePath, sessionDir); err != nil {
-		return fmt.Errorf("extract failed: %w", err)
-	}
-	if err := os.Remove(archivePath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to remove archive: %v\n", err)
-	}
-
-	fmt.Printf("Restored %s\n", sessionID)
-	fmt.Printf("  from: %s\n", archivePath)
-	fmt.Printf("    to: %s\n", targetFile)
+	fmt.Printf("Restored %s\n", uuid)
+	fmt.Printf("  from: %s\n", res.ArchivePath)
+	fmt.Printf("    to: %s\n", res.JSONLPath)
 	return nil
 }
