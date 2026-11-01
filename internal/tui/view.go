@@ -80,7 +80,9 @@ func (m Model) header() string {
 	title := fmt.Sprintf(" ccctl ui — :%s", m.view.label())
 	hint := "  (1/2/3 view · tab/h/l switch · j/k move · enter act · a archive · r restore · A show-arc · +/- </> resize · : cmd · q quit)"
 	line := headerStyle.Render(title) + footerStyle.Render(hint)
-	return padLine(line, m.width)
+	// Cut the line at the terminal width: a wrapped header shifts the
+	// whole frame down by a row.
+	return padLine(lipgloss.NewStyle().MaxWidth(m.width).Render(line), m.width)
 }
 
 func (m Model) footer() string {
@@ -137,11 +139,15 @@ func (m Model) renderBrowse(h int) string {
 		bottomContentH = 2
 	}
 
-	proj := projStyle.Width(projW).Height(topContentH).Render(m.renderProjectsPane(projW-4, topContentH))
-	sess := sessStyle.Width(sessW).Height(topContentH).Render(m.renderSessionsPane(sessW-4, topContentH))
+	// lipgloss Style.Width excludes the border, so each pane gets its
+	// share minus the 2 border columns (as in renderActive).
+	// lipgloss Height is a minimum: content taller than it grows the pane.
+	// clipBlock keeps each pane at its height on small terminals.
+	proj := projStyle.Width(projW - 2).Height(topContentH).Render(clipBlock(m.renderProjectsPane(projW-4, topContentH), topContentH))
+	sess := sessStyle.Width(sessW - 2).Height(topContentH).Render(clipBlock(m.renderSessionsPane(sessW-4, topContentH), topContentH))
 	topRow := lipgloss.JoinHorizontal(lipgloss.Top, proj, sess)
 
-	detail := paneStyle.Width(m.width).Height(bottomContentH).Render(m.renderDetailPane(m.width-4, bottomContentH))
+	detail := paneStyle.Width(m.width - 2).Height(bottomContentH).Render(clipBlock(m.renderDetailPane(m.width-4, bottomContentH), bottomContentH))
 	return lipgloss.JoinVertical(lipgloss.Left, topRow, detail)
 }
 
@@ -385,7 +391,7 @@ func (m Model) sessionDetail(r session.Row, w int) string {
 	}
 	rows := []kv{
 		{"uuid", r.UUID},
-		{"title", nonEmpty(r.Meta.CustomTitle, "—")},
+		{"title", nonEmpty(r.Meta.Title(), "—")},
 		{"summary", nonEmpty(r.Meta.Summary, "—")},
 		{"cwd", nonEmpty(r.Meta.Cwd, "—")},
 		{"size", humanBytesCellTUI(r.Size)},
@@ -409,7 +415,10 @@ func renderKV(rows []kv, w int) string {
 		b.WriteString(val)
 		b.WriteString("\n")
 	}
-	return b.String()
+	// No newline after the last row: it would add an empty line, and a
+	// pane whose content is taller than its height grows and pushes the
+	// header off the screen.
+	return strings.TrimSuffix(b.String(), "\n")
 }
 
 // paneTitle formats the top line of a list pane: "<name> <cursor>/<count>".
@@ -528,6 +537,15 @@ func padLine(s string, w int) string {
 		return s
 	}
 	return s + strings.Repeat(" ", w-plain)
+}
+
+// clipBlock keeps the first h lines of s.
+func clipBlock(s string, h int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= h {
+		return s
+	}
+	return strings.Join(lines[:h], "\n")
 }
 
 func padBlock(s string, h int) string {
