@@ -7,9 +7,9 @@ I use Claude Code all day, so I started writing small shell helpers for
 it. Now all packaged into a single Go binary, for awesome speed and easy
 install on macOS and Linux. That's it, Claude Code control: ccctl. Enjoy!
 
-![ccctl ps lists the running sessions; ccctl focus with tab completion jumps into one](docs/demo/hero.gif)
-
 ## Where is that session I had? Which window, which tab, which screen?
+
+![ccctl ps lists the running sessions; ccctl focus with tab completion jumps into one](docs/demo/hero.gif)
 
 ```sh
 ccctl ps            # every running Claude Code session
