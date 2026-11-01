@@ -3,13 +3,13 @@
 **Find, jump into and search your Claude Code sessions.**
 Unofficial, not affiliated with Anthropic.
 
+I use Claude Code all day, so I started writing small shell helpers for
+it. Now all packaged into a single Go binary, for awesome speed and easy
+install on macOS and Linux. That's it, Claude Code control: ccctl. Enjoy!
+
 ![ccctl ps lists the running sessions; ccctl focus with tab completion jumps into one](docs/demo/hero.gif)
 
-```sh
-brew install crux/tap/ccctl
-```
-
-## Where was that session?
+## Where is that session I had? Which window, which tab, which screen?
 
 ```sh
 ccctl ps            # every running Claude Code session
@@ -19,13 +19,16 @@ ccctl focus <Tab>   # pick one by its title, land in its terminal
 `focus` brings the session to the front: the iTerm2 tab, the
 Terminal.app window or the tmux pane.
 
-## Search every conversation
+## Didn't I already have a session on …?
 
 ![ccctl status shows 448 sessions and 925 MB; ccctl find searches all of them in a third of a second](docs/demo/find.gif)
 
 ```sh
 ccctl find "rate limit"
 ```
+
+`find` searches every conversation in every project. My 1.5 GB, 8 months
+of work, complete search in about a second (faster soon).
 
 ## All of it in one place
 
@@ -35,7 +38,8 @@ ccctl find "rate limit"
 ccctl ui
 ```
 
-Enter resumes a session, or jumps to it while it runs.
+`ccctl ui` shows all projects, all sessions and the running ones on one
+screen. Enter resumes a session, or jumps to it while it runs.
 Next: search as you type, right in `ccctl ui`.
 
 ## Move and rename
@@ -45,7 +49,8 @@ ccctl move <session> <dir>    # a session into another project
 ccctl move <dir> <new-path>   # a directory, with its sessions, memory, settings and prompt history
 ```
 
-`--dry-run` shows the plan first.
+Rename a project directory and keep every session. `--dry-run` shows
+the plan first.
 
 ## And more
 
@@ -57,20 +62,6 @@ ccctl move <dir> <new-path>   # a directory, with its sessions, memory, settings
 | `ccctl archive`, `ccctl restore` | pack a session into a `.zip`, and back |
 
 `ccctl <command> --help` shows the details.
-
-## What ccctl changes
-
-Most commands only read. These commands change files:
-
-- `move <session> <dir>` moves the files of one session from one project
-  folder to another.
-- `move <dir> <new-path>` renames the directory and its project folders.
-  It copies the directory's settings in `~/.claude.json` and changes the
-  project path in `~/.claude/history.jsonl`. It edits both files under
-  Claude Code's own file lock. It refuses while Claude Code runs inside
-  the directory.
-- `archive` packs a session into `<session>.zip`. It checks the archive
-  before it removes the original files. `restore` unpacks it again.
 
 ## Install
 
@@ -93,11 +84,10 @@ pseudo-version that names the commit.
 
 ### Direct download
 
-Download `ccctl-<version>-darwin-<arch>.tar.gz` from the
-[releases page](https://github.com/crux/ccctl/releases): `arm64` for
-Apple silicon, `amd64` for Intel. The `.sha256` file next to it shows
-that the download is complete. It does not prove where the file comes
-from.
+Download `ccctl-<version>-<os>-<arch>.tar.gz` from the
+[releases page](https://github.com/crux/ccctl/releases): `darwin` or
+`linux`, `arm64` or `amd64`. The `.sha256` file next to it shows that
+the download is complete. It does not prove where the file comes from.
 
 ccctl is not notarized. After a download with a browser, macOS blocks
 the first start. Remove the quarantine flag once:
@@ -128,6 +118,20 @@ command -v ccctl >/dev/null && source <(ccctl completion bash)
 command -q ccctl; and ccctl completion fish | source
 ```
 
+## What ccctl changes
+
+Most commands only read. These commands change files:
+
+- `move <session> <dir>` moves the files of one session from one project
+  folder to another.
+- `move <dir> <new-path>` renames the directory and its project folders.
+  It copies the directory's settings in `~/.claude.json` and changes the
+  project path in `~/.claude/history.jsonl`. It edits both files under
+  Claude Code's own file lock. It refuses while Claude Code runs inside
+  the directory.
+- `archive` packs a session into `<session>.zip`. It checks the archive
+  before it removes the original files. `restore` unpacks it again.
+
 ## Claude Code integration
 
 `claude/commands/post-session-move-memory.md` is a Claude Code command.
@@ -154,24 +158,8 @@ The repository holds the source. Change the command here, then run
 
 ## Platform support
 
-ccctl runs on macOS. It reads the files that Claude Code writes under
-`~/.claude/`. Anthropic does not document them, so a Claude Code update
-can change them. Tested with Claude Code 2.1.316 on macOS 27.
-
-**Linux: not released yet.** Most commands read files that Claude Code
-writes in the same way on every platform, so they should work. Three
-things block a release:
-
-- `focus` can only switch tmux panes. iTerm2 and Terminal.app exist only
-  on macOS, and ccctl does not raise windows under X11 or Wayland.
-- Older Claude Code versions write no session records. For them, ccctl
-  falls back to `lsof`, which not every Linux system has. Current
-  versions do not need it.
-- Nobody has run ccctl on Linux yet. CI builds and tests it there.
-
-**Windows: not supported.** ccctl finds Claude Code processes with `ps`
-and `lsof`, and `focus` works with macOS terminals and tmux. Windows has
-none of these. `move` also uses Unix file-system calls.
+Tested on macOS 27 and Debian 13, with Claude Code 2.1.316. Windows is
+not supported.
 
 ## Development
 
@@ -198,7 +186,7 @@ For maintainers. Releases come only from CI.
 1. Commit and push to `main`.
 2. Run `make release VERSION=x.y.z`. The target checks the repo, creates
    the tag `vx.y.z` and pushes it.
-3. The `Release` workflow runs the checks, builds the macOS archives,
+3. The `Release` workflow runs the checks, builds the archives,
    creates the GitHub release with notes from the commit log, and
    updates the Homebrew formula in `crux/homebrew-tap`.
 
