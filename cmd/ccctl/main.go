@@ -13,6 +13,8 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "ccctl",
 	Short: "Inspect and manage Claude Code sessions and project folders",
+	// Version makes cobra add --version (see version.go).
+	Version: versionString(),
 	Long: `ccctl inspects and operates on Claude Code sessions stored under
 ~/.claude/projects/<encoded-project>/. It is an unofficial tool, not
 affiliated with Anthropic.
