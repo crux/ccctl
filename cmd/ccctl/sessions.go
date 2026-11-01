@@ -20,7 +20,7 @@ var sessionsCmd = &cobra.Command{
 	Long: `List sessions stored for a project directory under
 ~/.claude/projects/<encoded-project>/. Default is the current working
 directory. Live sessions only by default; -a / --archived also lists
-sessions previously packed via claude-archive-session (marked
+sessions previously packed with 'ccctl archive' (marked
 "[archived]").`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: runSessions,

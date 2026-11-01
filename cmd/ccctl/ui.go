@@ -16,10 +16,17 @@ Views:
   :sessions   sessions in the focused project
   :active     currently-running claude processes (live refresh)
 
-Switch views with ':<name>' or the 1 / 2 / 3 shortcuts. 'q' quits.
-
-Step 1 scaffold: layout + navigation only. Data wiring and resume
-actions arrive in later steps.`,
+Keys:
+  1 / 2 / 3, :<view>   switch view
+  tab, h / l           switch pane
+  j / k, g / G         move, jump to top / bottom
+  enter                :projects → open its sessions
+                       :sessions → focus the running session, or resume it
+                       :active   → focus the session
+  a / r                archive / restore the session under the cursor
+  A                    show or hide archived sessions
+  + / -, < / >         resize the panes
+  q                    quit`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error { return tui.Run() },
 }
