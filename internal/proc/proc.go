@@ -366,6 +366,20 @@ func runLsof(args ...string) ([]byte, error) {
 	return raw, nil
 }
 
+// SessionInUse reports whether a running claude process has the session
+// uuid (stored at path) open. The session records in ~/.claude/sessions/
+// answer this for current Claude Code versions, without lsof. Older
+// versions write no records; lsof catches them where it is installed.
+func SessionInUse(uuid, path string) bool {
+	if ps, err := FindPIDBySessionID(uuid); err == nil && ps != nil {
+		return true
+	}
+	if _, err := exec.LookPath("lsof"); err == nil {
+		return IsFileOpen(path)
+	}
+	return false
+}
+
 // IsFileOpen returns true if any process has `path` open.
 // Uses lsof; exit code 0 = someone has it open, non-zero = nobody does.
 func IsFileOpen(path string) bool {

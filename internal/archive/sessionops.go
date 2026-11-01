@@ -36,7 +36,7 @@ func ArchiveSession(uuid string) (SessionArchiveResult, error) {
 	if _, err := os.Stat(archivePath); err == nil {
 		return SessionArchiveResult{}, fmt.Errorf("%s already exists; refusing to overwrite", archivePath)
 	}
-	if proc.IsFileOpen(sourceFile) {
+	if proc.SessionInUse(uuid, sourceFile) {
 		return SessionArchiveResult{}, fmt.Errorf("session %s is open by a running claude process; close it first", uuid)
 	}
 

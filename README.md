@@ -96,6 +96,30 @@ command -v ccctl >/dev/null && source <(ccctl completion bash)
 command -q ccctl; and ccctl completion fish | source
 ```
 
+## Claude Code integration
+
+`claude/commands/post-session-move-memory.md` is a Claude Code command.
+After `ccctl move <session> <dir>`, run `/post-session-move-memory` in
+the resumed session. It finds the memory files that the session wrote in
+the old project folder, and helps you move, keep or remove each one.
+
+```sh
+make claude-install   # copy the command into ~/.claude/commands
+make claude-check     # report a missing or changed copy
+```
+
+Without a clone of this repository (for example after a Homebrew
+install), download the command directly:
+
+```sh
+mkdir -p ~/.claude/commands
+curl -fsSL https://raw.githubusercontent.com/crux/ccctl/main/claude/commands/post-session-move-memory.md \
+  -o ~/.claude/commands/post-session-move-memory.md
+```
+
+The repository holds the source. Change the command here, then run
+`make claude-install`.
+
 ## Platform support
 
 ccctl runs on macOS.
@@ -106,9 +130,9 @@ things block a release:
 
 - `focus` can only switch tmux panes. iTerm2 and Terminal.app exist only
   on macOS, and ccctl does not raise windows under X11 or Wayland.
-- `archive` uses `lsof` to check for open files, and so does the
-  fallback for older Claude Code versions. Not every Linux system has
-  `lsof`.
+- Older Claude Code versions write no session records. For them, ccctl
+  falls back to `lsof`, which not every Linux system has. Current
+  versions do not need it.
 - Nobody has run ccctl on Linux yet. CI builds and tests it there.
 
 **Windows: not supported.** ccctl finds Claude Code processes with `ps`

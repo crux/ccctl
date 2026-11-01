@@ -45,8 +45,10 @@ ccctl move <session-id> <dir>
   space-separated form.
 
   Memory files that the session wrote stay in the old project's
-  memory/ folder. After the move, copy the ones that belong to the new
-  project.
+  memory/ folder. After the move, run /post-session-move-memory in the
+  resumed session: it finds them and helps to move, keep or remove each
+  one. The command ships with ccctl (make claude-install; see README,
+  "Claude Code integration").
 
 ccctl move <dir> <new-path>
 
@@ -436,6 +438,6 @@ func runSessionMove(sessionID, targetDir string) error {
 	fmt.Println()
 	fmt.Println("Memory files this session wrote stay in the old project's folder:")
 	fmt.Printf("  %s\n", filepath.Join(sourceDir, "memory"))
-	fmt.Println("Copy the ones that belong to the new project.")
+	fmt.Println("Run /post-session-move-memory in the resumed session to sort them out.")
 	return nil
 }

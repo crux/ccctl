@@ -45,6 +45,12 @@ test-real: ## read-only: check that edits round-trip the real ~/.claude.json and
 clean: ## remove build output
 	rm -rf bin dist
 
+claude-install: ## copy the Claude Code commands into ~/.claude/commands
+	bash scripts/claude.sh install
+
+claude-check: ## fail when an installed Claude Code command is missing or differs
+	bash scripts/claude.sh check
+
 # --- release -----------------------------------------------------------
 
 require-version:
@@ -62,4 +68,4 @@ publish: require-version ## create the GitHub release from dist/ (CI)
 tap: require-version ## write the Homebrew formula and push it to the tap (CI)
 	bash scripts/tap.sh "$(VERSION)"
 
-.PHONY: help build install check vet test fmt-check fmt tidy test-real clean require-version release dist publish tap
+.PHONY: help build install check vet test fmt-check fmt tidy test-real clean claude-install claude-check require-version release dist publish tap
