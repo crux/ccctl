@@ -135,7 +135,9 @@ For maintainers. Releases come only from CI.
    updates the Homebrew formula in `crux/homebrew-tap`.
 
 Secret: `HOMEBREW_TAP_TOKEN`, a fine-grained token with Contents read and
-write on `crux/homebrew-tap` only.
+write on `crux/homebrew-tap` only. It expires on 2027-01-30. Before that,
+create a new token and set it on every repo that publishes to the tap
+(`gh secret set HOMEBREW_TAP_TOKEN --repo crux/<repo>`).
 
 The moving parts: `Makefile`, `release.env`, `scripts/`,
 `.github/workflows/`.
