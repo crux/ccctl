@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"sync"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -86,12 +87,54 @@ type activeListLoadedMsg struct {
 }
 
 // loadActiveListCmd runs the fuller ListClaudeProcesses — one entry
-// per running `claude` process with cwd, uuid, title, status.
+// per running `claude` process with cwd, uuid, title, status. A process
+// without a real title (Claude Code's derived placeholder name) gets the
+// title from its session file, as `ccctl ps` does.
 func loadActiveListCmd() tea.Cmd {
 	return func() tea.Msg {
 		procs, err := proc.ListClaudeProcesses()
+		now := time.Now()
+		for i := range procs {
+			if procs[i].Title == "" && procs[i].SessionFile != "" {
+				procs[i].Title = sessionTitle(procs[i].SessionFile, now)
+			}
+		}
 		return activeListLoadedMsg{procs: procs, err: err}
 	}
+}
+
+// titleTTL bounds how often the :active view reads a session file for
+// its title. The view refreshes every 2s; a title changes rarely.
+const titleTTL = 30 * time.Second
+
+type cachedTitle struct {
+	title string
+	at    time.Time
+}
+
+var (
+	titleMu    sync.Mutex
+	titleCache = map[string]cachedTitle{}
+)
+
+// sessionTitle returns the title of a session file in Claude Code's
+// order (custom title, AI title, summary), cached for titleTTL. It
+// returns "" when the file has none.
+func sessionTitle(path string, now time.Time) string {
+	titleMu.Lock()
+	c, ok := titleCache[path]
+	titleMu.Unlock()
+	if ok && now.Sub(c.at) < titleTTL {
+		return c.title
+	}
+	var title string
+	if m, err := session.ReadMeta(path); err == nil {
+		title = m.Title()
+	}
+	titleMu.Lock()
+	titleCache[path] = cachedTitle{title: title, at: now}
+	titleMu.Unlock()
+	return title
 }
 
 // activeTickMsg is the 2s heartbeat for the :active view. Carries no

@@ -121,7 +121,16 @@ none of these. `move` also uses Unix file-system calls.
 make help     # list the targets
 make build    # bin/ccctl for this machine
 make check    # go vet, tests, gofmt
+make install  # the dev build into $(go env GOPATH)/bin
 ```
+
+A dev build reports a Go pseudo-version: the last release, the commit
+time and the commit, plus `+dirty` for uncommitted changes, for example
+`ccctl version 0.1.1-0.20261102093000-abcdef123456+dirty`.
+
+If Homebrew installed ccctl too, its copy usually comes first in PATH.
+`brew unlink ccctl` lets the dev build win; `brew link ccctl` switches
+back. `which -a ccctl` shows which copies exist.
 
 ## Releasing
 
