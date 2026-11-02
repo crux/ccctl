@@ -11,6 +11,8 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -27,6 +29,7 @@ const (
 	viewProjects view = iota
 	viewSessions
 	viewActive
+	viewAll
 )
 
 func (v view) label() string {
@@ -37,6 +40,72 @@ func (v view) label() string {
 		return "sessions"
 	case viewActive:
 		return "active"
+	case viewAll:
+		return "all"
+	}
+	return "?"
+}
+
+// allSortKey picks which column drives the sort in :all. Direction is
+// held separately via allSortDesc so we can reverse any key.
+type allSortKey int
+
+const (
+	allSortMTime   allSortKey = iota // default
+	allSortTitle
+	allSortSize
+	allSortProject
+	allSortUUID
+)
+
+func (k allSortKey) label() string {
+	switch k {
+	case allSortMTime:
+		return "mtime"
+	case allSortTitle:
+		return "title"
+	case allSortSize:
+		return "size"
+	case allSortProject:
+		return "project"
+	case allSortUUID:
+		return "uuid"
+	}
+	return "?"
+}
+
+// naturalDesc gives the sort direction most people expect for a given
+// key: mtime newest first, size biggest first; title and project
+// alphabetically ascending.
+func naturalDesc(k allSortKey) bool {
+	switch k {
+	case allSortMTime, allSortSize:
+		return true
+	}
+	return false
+}
+
+// allStatus filters the :all list to one slice of the running / archived
+// axis. Cycled by `f`.
+type allStatus int
+
+const (
+	allStatusAll allStatus = iota
+	allStatusRunning
+	allStatusNotRunning
+	allStatusArchived
+)
+
+func (s allStatus) label() string {
+	switch s {
+	case allStatusAll:
+		return "all"
+	case allStatusRunning:
+		return "running"
+	case allStatusNotRunning:
+		return "not-running"
+	case allStatusArchived:
+		return "archived"
 	}
 	return "?"
 }
@@ -79,6 +148,22 @@ type Model struct {
 	activeTicking     bool
 	activeLastRefresh time.Time
 
+	// :all view state. all is the full cross-project session list,
+	// loaded once per entry (and after mutations) via loadAllCmd. The
+	// filtered + sorted view is computed on each render via
+	// allVisible() so cursor movement, filter edits and sort changes
+	// stay cheap and the raw data stays canonical.
+	all              []AllRow
+	allCursor        int
+	allLoading       bool
+	allLoaded        bool
+	allLastRefresh   time.Time
+	allSort          allSortKey
+	allSortDesc      bool
+	allStatusFilter  allStatus
+	filterMode       bool   // typing into the /… input
+	filterBuf        string // live filter text, incremental
+
 	// Split ratios, percent of the available body region.
 	// topRowPct   — height of PROJECTS/SESSIONS row (vs DETAIL below).
 	// projColPct  — width of PROJECTS within the top row (vs SESSIONS).
@@ -100,6 +185,8 @@ func New() Model {
 		projectsLoading: true,
 		topRowPct:       65,
 		projColPct:      40,
+		allSort:         allSortMTime,
+		allSortDesc:     naturalDesc(allSortMTime),
 	}
 }
 
@@ -130,6 +217,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "projects: " + msg.err.Error()
 			return m, nil
 		}
+		m.clearRefreshingStatus()
 		m.projects = msg.projects
 		if m.projectCursor >= len(m.projects) {
 			m.projectCursor = 0
@@ -148,6 +236,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "sessions: " + msg.err.Error()
 			return m, nil
 		}
+		m.clearRefreshingStatus()
 		m.sessions = msg.rows
 		if m.sessionCursor >= len(m.sessions) {
 			m.sessionCursor = 0
@@ -166,6 +255,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "active: " + msg.err.Error()
 			return m, nil
 		}
+		m.clearRefreshingStatus()
 		m.active = msg.rows
 		if m.activeCursor >= len(m.active) {
 			if len(m.active) == 0 {
@@ -185,6 +275,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(loadActiveListCmd(), activeTickCmd())
 
+	case allLoadedMsg:
+		m.allLoading = false
+		m.allLoaded = true
+		m.allLastRefresh = time.Now()
+		if msg.err != nil {
+			m.status = "all: " + msg.err.Error()
+			return m, nil
+		}
+		m.clearRefreshingStatus()
+		m.all = msg.rows
+		m.clampAllCursor()
+		return m, nil
+
 	case focusDoneMsg:
 		var bg *focus.BackgroundError
 		if errors.As(msg.err, &bg) {
@@ -203,7 +306,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = fmt.Sprintf("archived %s", shortUUID(msg.uuid))
-		return m, m.reloadSessions()
+		return m, m.reloadAfterSessionMutation()
 
 	case restoreDoneMsg:
 		if msg.err != nil {
@@ -211,7 +314,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.status = fmt.Sprintf("restored %s", shortUUID(msg.uuid))
-		return m, m.reloadSessions()
+		return m, m.reloadAfterSessionMutation()
 
 	case resumeDoneMsg:
 		// On return from `claude --resume`, refresh everything that
@@ -221,8 +324,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.view == viewActive {
 			cmds = append(cmds, loadActiveListCmd())
 		}
-		// The session that we just left may have grown; reload it too.
-		if cmd := m.reloadSessions(); cmd != nil {
+		// The session we just left may have grown; reload whichever
+		// view currently cares about session rows.
+		if cmd := m.reloadAfterSessionMutation(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
 		switch {
@@ -240,6 +344,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if m.cmdMode {
 			return m.updateCmdMode(msg)
+		}
+		if m.filterMode {
+			return m.updateFilterMode(msg)
 		}
 		return m.updateNormal(msg)
 	}
@@ -263,6 +370,8 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.switchView(viewSessions)
 	case "3":
 		return m.switchView(viewActive)
+	case "4":
+		return m.switchView(viewAll)
 	case "tab":
 		if m.view == viewProjects {
 			return m.switchView(viewSessions)
@@ -271,10 +380,16 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.switchView(viewProjects)
 		}
 	case "h", "left":
+		if m.view == viewAll {
+			return m.cycleSort(-1)
+		}
 		if m.view == viewSessions {
 			return m.switchView(viewProjects)
 		}
 	case "l", "right":
+		if m.view == viewAll {
+			return m.cycleSort(+1)
+		}
 		if m.view == viewProjects {
 			return m.switchView(viewSessions)
 		}
@@ -297,13 +412,42 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.enterAction()
 
-	// Session-row actions (`:sessions` only).
+	// Session-row actions (`:sessions` and `:all`).
 	case "A":
 		return m.toggleIncludeArchived()
 	case "a":
 		return m.archiveAction()
 	case "r":
 		return m.restoreAction()
+
+	// :all sort + filter keys. s cycles the sort key forward (←/→ are
+	// aliases in this view); S reverses direction; f cycles the status
+	// filter; / opens the filter input. Each sort-key change resets to
+	// that key's natural direction (newest/biggest first for mtime+size,
+	// alphabetical for title+project) — S from there reverses.
+	case "s":
+		if m.view == viewAll {
+			return m.cycleSort(+1)
+		}
+	case "S":
+		if m.view == viewAll {
+			m.allSortDesc = !m.allSortDesc
+			m.status = fmt.Sprintf("sort: %s%s", m.allSort.label(), sortDirMark(m.allSortDesc))
+			return m, nil
+		}
+	case "f":
+		if m.view == viewAll {
+			m.allStatusFilter = (m.allStatusFilter + 1) % 4
+			m.allCursor = 0
+			m.status = fmt.Sprintf("status filter: %s", m.allStatusFilter.label())
+			return m, nil
+		}
+	case "/":
+		if m.view == viewAll {
+			m.filterMode = true
+			m.status = ""
+			return m, nil
+		}
 
 	// Pane resize. +/- grow or shrink the top row; </> shift the
 	// PROJECTS vs SESSIONS boundary within the top row.
@@ -321,6 +465,197 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// updateFilterMode routes keypresses while the /… filter input is active
+// in :all. The filter is incremental: every keystroke that changes
+// filterBuf resets the cursor so the user doesn't drift off a now-
+// filtered row.
+func (m Model) updateFilterMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.filterMode = false
+		m.filterBuf = ""
+		m.allCursor = 0
+		return m, nil
+	case "enter":
+		m.filterMode = false
+		return m, nil
+	case "backspace":
+		if len(m.filterBuf) > 0 {
+			m.filterBuf = m.filterBuf[:len(m.filterBuf)-1]
+			m.allCursor = 0
+		}
+		return m, nil
+	default:
+		s := msg.String()
+		if len(s) == 1 {
+			m.filterBuf += s
+			m.allCursor = 0
+		}
+		return m, nil
+	}
+}
+
+// clearRefreshingStatus clears the "refreshing…" status set by
+// refreshCurrentView once a load completes, without touching any other
+// transient status message the user may have in flight.
+func (m *Model) clearRefreshingStatus() {
+	if m.status == "refreshing…" {
+		m.status = ""
+	}
+}
+
+// sortDirMark is a short glyph showing current sort direction.
+func sortDirMark(desc bool) string {
+	if desc {
+		return " ↓"
+	}
+	return " ↑"
+}
+
+// allSortOrder is the sortable columns in the order they appear on
+// screen in :all. Left/right (and s) walk this list so stepping tracks
+// what the eye sees rather than the enum's declaration order.
+var allSortOrder = []allSortKey{allSortMTime, allSortSize, allSortProject, allSortUUID, allSortTitle}
+
+// cycleSort shifts the :all sort key by delta — in visual column order —
+// and resets to the key's natural direction. Pressed as `s` (+1),
+// `h`/`←` (-1), `l`/`→` (+1).
+func (m Model) cycleSort(delta int) (tea.Model, tea.Cmd) {
+	n := len(allSortOrder)
+	idx := 0
+	for i, k := range allSortOrder {
+		if k == m.allSort {
+			idx = i
+			break
+		}
+	}
+	idx = ((idx+delta)%n + n) % n
+	m.allSort = allSortOrder[idx]
+	m.allSortDesc = naturalDesc(m.allSort)
+	m.allCursor = 0
+	m.status = fmt.Sprintf("sort: %s%s", m.allSort.label(), sortDirMark(m.allSortDesc))
+	return m, nil
+}
+
+// allVisible returns the indices into m.all that pass the current
+// filters, in the configured sort order. Computed on every call; m.all
+// stays canonical. Cheap at the scale we care about (~hundreds of rows).
+func (m Model) allVisible() []int {
+	home, _ := os.UserHomeDir()
+	_ = home // unused here; name resolution happens in loadAllCmd
+	var out []int
+	needle := strings.ToLower(m.filterBuf)
+	for i, r := range m.all {
+		if !m.allRowMatchesStatus(r) {
+			continue
+		}
+		if needle != "" && !allRowMatchesText(r, needle) {
+			continue
+		}
+		out = append(out, i)
+	}
+	sort.SliceStable(out, func(a, b int) bool {
+		return allLess(m.all[out[a]], m.all[out[b]], m.allSort, m.allSortDesc)
+	})
+	return out
+}
+
+// allRowMatchesStatus honours the current cycle of f: all / running /
+// not-running / archived.
+func (m Model) allRowMatchesStatus(r AllRow) bool {
+	switch m.allStatusFilter {
+	case allStatusRunning:
+		return m.activeSet.Confident[r.UUID] || m.activeSet.Guessed[r.UUID]
+	case allStatusNotRunning:
+		if r.Archived {
+			return false
+		}
+		return !(m.activeSet.Confident[r.UUID] || m.activeSet.Guessed[r.UUID])
+	case allStatusArchived:
+		return r.Archived
+	}
+	return true
+}
+
+// allRowMatchesText is the free-text filter — matches on title,
+// project name, or UUID prefix. Case-insensitive.
+func allRowMatchesText(r AllRow, needle string) bool {
+	title := strings.ToLower(r.Meta.Display())
+	if strings.Contains(title, needle) {
+		return true
+	}
+	if strings.Contains(strings.ToLower(r.ProjectName), needle) {
+		return true
+	}
+	if strings.HasPrefix(strings.ToLower(r.UUID), needle) {
+		return true
+	}
+	return false
+}
+
+// allLess compares two rows for the configured sort key. desc inverts.
+// The secondary sort (within equal primary keys) is always mtime desc,
+// so a sort by title or project still shows newest first inside a bucket.
+func allLess(a, b AllRow, key allSortKey, desc bool) bool {
+	primary := func() int {
+		switch key {
+		case allSortTitle:
+			return strings.Compare(strings.ToLower(a.Meta.Display()), strings.ToLower(b.Meta.Display()))
+		case allSortSize:
+			switch {
+			case a.Size < b.Size:
+				return -1
+			case a.Size > b.Size:
+				return 1
+			}
+			return 0
+		case allSortProject:
+			return strings.Compare(strings.ToLower(a.ProjectName), strings.ToLower(b.ProjectName))
+		case allSortUUID:
+			return strings.Compare(a.UUID, b.UUID)
+		}
+		// Default: mtime
+		switch {
+		case a.MTime.Before(b.MTime):
+			return -1
+		case a.MTime.After(b.MTime):
+			return 1
+		}
+		return 0
+	}()
+	if primary != 0 {
+		if desc {
+			return primary > 0
+		}
+		return primary < 0
+	}
+	// Secondary: newer first regardless of desc.
+	return a.MTime.After(b.MTime)
+}
+
+func (m *Model) clampAllCursor() {
+	vis := m.allVisible()
+	if m.allCursor >= len(vis) {
+		if len(vis) == 0 {
+			m.allCursor = 0
+		} else {
+			m.allCursor = len(vis) - 1
+		}
+	}
+	if m.allCursor < 0 {
+		m.allCursor = 0
+	}
+}
+
+// currentAllRow returns the AllRow under the :all cursor (or ok=false).
+func (m Model) currentAllRow() (AllRow, bool) {
+	vis := m.allVisible()
+	if m.allCursor < 0 || m.allCursor >= len(vis) {
+		return AllRow{}, false
+	}
+	return m.all[vis[m.allCursor]], true
 }
 
 func (m Model) updateCmdMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -358,6 +693,8 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 		return m.switchView(viewSessions)
 	case "active":
 		return m.switchView(viewActive)
+	case "all":
+		return m.switchView(viewAll)
 	case "q", "quit":
 		m.status = "use 'q' in normal mode to quit"
 		return m, nil
@@ -422,6 +759,27 @@ func (m Model) enterAction() (tea.Model, tea.Cmd) {
 		}
 		m.status = fmt.Sprintf("focusing %s…", shortUUID(p.UUID))
 		return m, focusCmd(p.UUID)
+
+	case viewAll:
+		ar, ok := m.currentAllRow()
+		if !ok {
+			return m, nil
+		}
+		r := ar.Row
+		if r.Archived {
+			m.status = fmt.Sprintf("archived — restore first: ccctl restore %s", r.UUID)
+			return m, nil
+		}
+		if m.activeSet.Confident[r.UUID] || m.activeSet.Guessed[r.UUID] {
+			m.status = fmt.Sprintf("focusing %s…", shortUUID(r.UUID))
+			return m, focusCmd(r.UUID)
+		}
+		cwd := r.Meta.Cwd
+		if cwd == "" {
+			m.status = fmt.Sprintf("no cwd known for %s; resume manually (cd <dir> && claude --resume %s)", shortUUID(r.UUID), r.UUID)
+			return m, nil
+		}
+		return m, resumeCmd(r.UUID, cwd)
 	}
 	return m, nil
 }
@@ -445,37 +803,61 @@ func (m Model) refreshCurrentView() (tea.Model, tea.Cmd) {
 	case viewActive:
 		m.activeLoading = true
 		cmds = append(cmds, loadActiveListCmd())
+	case viewAll:
+		m.allLoading = true
+		cmds = append(cmds, loadAllCmd(m.includeTmp, m.includeArchived))
 	}
 	m.status = "refreshing…"
 	return m, tea.Batch(cmds...)
 }
 
-// toggleIncludeArchived flips whether .zip rows show in the sessions
-// pane and reloads the current project's sessions. Only meaningful in
-// :sessions / :projects; silent elsewhere.
+// toggleIncludeArchived flips whether .zip rows show in session lists
+// and reloads whichever list is current. In :sessions / :projects this
+// re-fires the project-level sessions load; in :all this re-fires the
+// cross-project load. Silent elsewhere.
 func (m Model) toggleIncludeArchived() (tea.Model, tea.Cmd) {
-	if m.view != viewProjects && m.view != viewSessions {
-		return m, nil
-	}
 	m.includeArchived = !m.includeArchived
 	label := "hidden"
 	if m.includeArchived {
 		label = "shown"
 	}
 	m.status = fmt.Sprintf("archived: %s", label)
-	return m, m.reloadSessions()
+	switch m.view {
+	case viewProjects, viewSessions:
+		return m, m.reloadSessions()
+	case viewAll:
+		m.allLoading = true
+		return m, loadAllCmd(m.includeTmp, m.includeArchived)
+	}
+	return m, nil
 }
 
-// archiveAction archives the session under the sessions cursor. Only
-// meaningful in :sessions. Refuses active or already-archived rows.
+// sessionRowForAction returns the session the current cursor sits on,
+// across :sessions and :all. Returns ok=false in other views.
+func (m Model) sessionRowForAction() (session.Row, bool) {
+	switch m.view {
+	case viewSessions:
+		if m.sessionCursor < 0 || m.sessionCursor >= len(m.sessions) {
+			return session.Row{}, false
+		}
+		return m.sessions[m.sessionCursor], true
+	case viewAll:
+		ar, ok := m.currentAllRow()
+		if !ok {
+			return session.Row{}, false
+		}
+		return ar.Row, true
+	}
+	return session.Row{}, false
+}
+
+// archiveAction archives the session under the cursor. Works in
+// :sessions and :all. Refuses active or already-archived rows.
 func (m Model) archiveAction() (tea.Model, tea.Cmd) {
-	if m.view != viewSessions {
+	r, ok := m.sessionRowForAction()
+	if !ok {
 		return m, nil
 	}
-	if m.sessionCursor < 0 || m.sessionCursor >= len(m.sessions) {
-		return m, nil
-	}
-	r := m.sessions[m.sessionCursor]
 	if r.Archived {
 		m.status = fmt.Sprintf("already archived: %s", shortUUID(r.UUID))
 		return m, nil
@@ -488,16 +870,13 @@ func (m Model) archiveAction() (tea.Model, tea.Cmd) {
 	return m, archiveCmd(r.UUID)
 }
 
-// restoreAction restores the archived session under the sessions
-// cursor. Only meaningful in :sessions on a .zip row.
+// restoreAction restores the archived session under the cursor. Works
+// in :sessions and :all. Refuses non-archived rows.
 func (m Model) restoreAction() (tea.Model, tea.Cmd) {
-	if m.view != viewSessions {
+	r, ok := m.sessionRowForAction()
+	if !ok {
 		return m, nil
 	}
-	if m.sessionCursor < 0 || m.sessionCursor >= len(m.sessions) {
-		return m, nil
-	}
-	r := m.sessions[m.sessionCursor]
 	if !r.Archived {
 		m.status = fmt.Sprintf("not archived: %s", shortUUID(r.UUID))
 		return m, nil
@@ -543,6 +922,13 @@ func (m Model) switchView(v view) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Batch(cmds...)
 	}
+	// :all is a static view; load once on first entry (or when the
+	// user has explicitly reset via ^R). Mutations re-load via their
+	// done-msg handlers.
+	if v == viewAll && !m.allLoaded && !m.allLoading {
+		m.allLoading = true
+		return m, loadAllCmd(m.includeTmp, m.includeArchived)
+	}
 	return m, nil
 }
 
@@ -567,6 +953,13 @@ func (m Model) moveCursor(delta int) (Model, tea.Cmd) {
 			return m, nil
 		}
 		m.activeCursor = clamp(m.activeCursor+delta, 0, len(m.active)-1)
+		return m, nil
+	case viewAll:
+		n := len(m.allVisible())
+		if n == 0 {
+			return m, nil
+		}
+		m.allCursor = clamp(m.allCursor+delta, 0, n-1)
 		return m, nil
 	}
 	return m, nil
@@ -601,6 +994,16 @@ func (m Model) jumpCursor(target int) (Model, tea.Cmd) {
 		}
 		m.activeCursor = clamp(target, 0, len(m.active)-1)
 		return m, nil
+	case viewAll:
+		n := len(m.allVisible())
+		if n == 0 {
+			return m, nil
+		}
+		if target < 0 {
+			target = n - 1
+		}
+		m.allCursor = clamp(target, 0, n-1)
+		return m, nil
 	}
 	return m, nil
 }
@@ -632,6 +1035,20 @@ func (m *Model) reloadSessions() tea.Cmd {
 	m.sessionsLoading = true
 	m.sessionsFor = ""
 	return loadSessionsCmd(dir, m.includeArchived)
+}
+
+// reloadAfterSessionMutation re-fires whichever list the current view
+// cares about after an archive / restore / resume-return. :sessions +
+// :projects reload the current project's sessions; :all reloads the
+// cross-project list; others no-op.
+func (m *Model) reloadAfterSessionMutation() tea.Cmd {
+	switch m.view {
+	case viewAll:
+		m.allLoading = true
+		return loadAllCmd(m.includeTmp, m.includeArchived)
+	default:
+		return m.reloadSessions()
+	}
 }
 
 // currentProjectDir returns the Dir of the project under the cursor, or

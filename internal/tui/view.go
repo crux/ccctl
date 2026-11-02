@@ -40,6 +40,10 @@ var (
 	activeMarkerStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("10"))
 
+	sortColHeadStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("14"))
+
 	guessedMarkerStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("11"))
 
@@ -71,6 +75,8 @@ func (m Model) View() string {
 		body = m.renderBrowse(bodyHeight)
 	case viewActive:
 		body = m.renderActive(bodyHeight)
+	case viewAll:
+		body = m.renderAll(bodyHeight)
 	}
 
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
@@ -78,7 +84,7 @@ func (m Model) View() string {
 
 func (m Model) header() string {
 	title := fmt.Sprintf(" ccctl ui — :%s", m.view.label())
-	hint := "  (1/2/3 view · tab/←→ switch · ↑↓ move · enter act · a archive · r restore · A show-arc · ^R refresh · +/- </> resize · : cmd · q quit)"
+	hint := "  (1/2/3/4 view · tab/←→ switch · ↑↓ move · enter act · a archive · r restore · A show-arc · s/S sort · f status · / filter · ^R refresh · +/- </> resize · : cmd · q quit)"
 	line := headerStyle.Render(title) + footerStyle.Render(hint)
 	// Cut the line at the terminal width: a wrapped header shifts the
 	// whole frame down by a row.
@@ -89,8 +95,15 @@ func (m Model) footer() string {
 	if m.cmdMode {
 		return cmdPromptStyle.Render(":") + m.cmdBuf + cmdPromptStyle.Render("_")
 	}
+	if m.filterMode {
+		return cmdPromptStyle.Render("/") + m.filterBuf + cmdPromptStyle.Render("_")
+	}
 	if m.status != "" {
 		return statusStyle.Render(m.status)
+	}
+	if m.view == viewAll {
+		return footerStyle.Render(fmt.Sprintf(" view=%s · sort=%s%s · status=%s · filter=%q",
+			m.view.label(), m.allSort.label(), sortDirMark(m.allSortDesc), m.allStatusFilter.label(), m.filterBuf))
 	}
 	return footerStyle.Render(fmt.Sprintf(" view=%s", m.view.label()))
 }
@@ -258,6 +271,129 @@ func formatActiveRow(p proc.Row, home string, statusW, pidW, uuidW, titleW, cwdW
 		padRight(uuid, uuidW) + " " +
 		padRight(truncate(title, titleW), titleW) + " " +
 		padRight(truncate(cwd, cwdW), cwdW)
+}
+
+// renderAll is the full-width :all cross-project view. Columns:
+// [marker] MTIME · SIZE · PROJECT · UUID · TITLE. Sort / filter state
+// is shown in the pane title and the footer; the row set is computed
+// via m.allVisible() per render.
+func (m Model) renderAll(h int) string {
+	contentH := h - 2
+	if contentH < 3 {
+		contentH = 3
+	}
+	w := m.width - 2
+	innerW := w - 4
+
+	visible := m.allVisible()
+	total := len(m.all)
+	count := len(visible)
+
+	title := m.paneTitle("ALL", m.allCursor, count, m.allLoading && count == 0)
+	title = title + paneSubStyle.Render(fmt.Sprintf(" · %d total · sort=%s%s · status=%s",
+		total, m.allSort.label(), sortDirMark(m.allSortDesc), m.allStatusFilter.label()))
+	if m.filterBuf != "" {
+		title = title + paneSubStyle.Render(fmt.Sprintf(" · /%s", m.filterBuf))
+	}
+	refreshNote := ""
+	if !m.allLastRefresh.IsZero() {
+		refreshNote = paneSubStyle.Render("  loaded " + m.allLastRefresh.Format("15:04:05"))
+	}
+	header := title + refreshNote
+
+	if count == 0 {
+		var msg string
+		switch {
+		case m.allLoading:
+			msg = paneSubStyle.Render("(loading…)")
+		case total == 0:
+			msg = paneSubStyle.Render("(no sessions)")
+		default:
+			msg = paneSubStyle.Render("(no matches — adjust filter)")
+		}
+		body := header + "\n" + msg
+		return activePaneStyle.Width(w).Height(contentH).Render(padBlock(body, contentH))
+	}
+
+	const (
+		markerW = 2  // "* " / "~ " / "  "
+		mtimeW  = 11 // "01-02 15:04"
+		sizeW   = 7
+		uuidW   = 10
+		gapW    = 1
+	)
+	flex := innerW - (markerW + mtimeW + sizeW + uuidW + 4*gapW) - 2
+	if flex < 20 {
+		flex = 20
+	}
+	projW := flex * 40 / 100
+	if projW < 14 {
+		projW = 14
+	}
+	titleW := flex - projW
+	if titleW < 10 {
+		titleW = 10
+	}
+
+	headRow := padRight("", markerW) +
+		colHead("MTIME", mtimeW, m.allSort == allSortMTime, m.allSortDesc) + " " +
+		colHead("SIZE", sizeW, m.allSort == allSortSize, m.allSortDesc) + " " +
+		colHead("PROJECT", projW, m.allSort == allSortProject, m.allSortDesc) + " " +
+		colHead("UUID", uuidW, m.allSort == allSortUUID, m.allSortDesc) + " " +
+		colHead("TITLE", titleW, m.allSort == allSortTitle, m.allSortDesc)
+
+	rowCap := contentH - 3
+	if rowCap < 1 {
+		rowCap = 1
+	}
+	top := scrollTop(m.allCursor, rowCap, count)
+
+	var b strings.Builder
+	b.WriteString(header)
+	b.WriteString("\n")
+	b.WriteString(headRow)
+	b.WriteString("\n")
+	for i := top; i < top+rowCap && i < count; i++ {
+		r := m.all[visible[i]]
+		row := formatAllRow(r, m.sessionMarker(r.UUID), mtimeW, sizeW, projW, uuidW, titleW)
+		if i == m.allCursor {
+			row = cursorRowStyle.Render(padRight(row, innerW))
+		}
+		b.WriteString(row)
+		b.WriteString("\n")
+	}
+	return activePaneStyle.Width(w).Height(contentH).Render(padBlock(b.String(), contentH))
+}
+
+// colHead renders one column heading, highlighted (bold cyan) when
+// that column is the current sort key — direction glyph appended inline
+// so you can see at a glance which column + direction you're sorted by.
+// Non-sort columns stay in the muted sub-style.
+func colHead(label string, width int, active, desc bool) string {
+	if active {
+		text := label + sortDirMark(desc)
+		return sortColHeadStyle.Render(padRight(text, width))
+	}
+	return paneSubStyle.Render(padRight(label, width))
+}
+
+// formatAllRow lays out one AllRow for the :all table. marker is a
+// pre-rendered 2-column string (e.g. "* ", "~ ", "  ").
+func formatAllRow(r AllRow, marker string, mtimeW, sizeW, projW, uuidW, titleW int) string {
+	title := r.Meta.Display()
+	if r.Archived {
+		title = "[arc] " + title
+	}
+	uuid := r.UUID
+	if len(uuid) > uuidW {
+		uuid = uuid[:uuidW-1] + "…"
+	}
+	return marker +
+		padRight(r.MTime.Format("01-02 15:04"), mtimeW) + " " +
+		padRight(humanBytesCellTUI(r.Size), sizeW) + " " +
+		padRight(truncate(r.ProjectName, projW), projW) + " " +
+		padRight(uuid, uuidW) + " " +
+		padRight(truncate(title, titleW), titleW)
 }
 
 // renderProjectsPane renders the PROJECTS list column in the given
@@ -606,21 +742,23 @@ func nonEmpty(s, fallback string) string {
 	return s
 }
 
-// humanBytesCellTUI mirrors cmd/ccctl's humanBytesCell shape without
-// pulling the CLI package in. Decimal-aligned, fixed small format.
+// humanBytesCellTUI mirrors cmd/ccctl's humanBytesCell: a fixed-width
+// cell with the decimal point in a stable column, so the "." stacks
+// down the SIZE column. Width is 7 ("1234   X").
 func humanBytesCellTUI(n int64) string {
-	const (
-		KB = 1024
-		MB = KB * 1024
-		GB = MB * 1024
-	)
-	switch {
-	case n >= GB:
-		return fmt.Sprintf("%.1f G", float64(n)/float64(GB))
-	case n >= MB:
-		return fmt.Sprintf("%.1f M", float64(n)/float64(MB))
-	case n >= KB:
-		return fmt.Sprintf("%.1f K", float64(n)/float64(KB))
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%3d   B", n)
 	}
-	return fmt.Sprintf("%d B", n)
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit; v /= unit {
+		div *= unit
+		exp++
+	}
+	v := float64(n) / float64(div)
+	suffix := string("KMGTPE"[exp])
+	if v >= 10 {
+		return fmt.Sprintf("%3.0f   %s", v, suffix)
+	}
+	return fmt.Sprintf("%5.1f %s", v, suffix)
 }

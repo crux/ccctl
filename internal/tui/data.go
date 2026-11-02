@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -229,5 +230,79 @@ func restoreCmd(uuid string) tea.Cmd {
 	return func() tea.Msg {
 		res, err := archive.RestoreSession(uuid)
 		return restoreDoneMsg{uuid: uuid, path: res.JSONLPath, err: err}
+	}
+}
+
+// AllRow is one row for the :all cross-project view. Wraps session.Row
+// with the owning project's display name (abbreviated path when known,
+// encoded namespace basename otherwise).
+type AllRow struct {
+	session.Row
+	ProjectName string
+	ProjectDir  string // real project.Dir under ~/.claude/projects/
+}
+
+type allLoadedMsg struct {
+	rows []AllRow
+	err  error
+}
+
+// loadAllCmd enumerates every ~/.claude/projects/ dir with the same
+// tmp-exclusion rule as :projects, then fans out ListInProject with
+// bounded concurrency and flattens the result into one []AllRow.
+func loadAllCmd(includeTmp, includeArchived bool) tea.Cmd {
+	return func() tea.Msg {
+		projects, err := project.ListProjects()
+		if err != nil {
+			return allLoadedMsg{err: err}
+		}
+		home, _ := os.UserHomeDir()
+		type pending struct {
+			dir  string
+			name string
+		}
+		var kept []pending
+		for _, p := range projects {
+			if !includeTmp && project.IsTmp(p) {
+				continue
+			}
+			name := p.EncodedName
+			if p.Cwd != "" {
+				name = p.Cwd
+				if home != "" && strings.HasPrefix(name, home) {
+					name = "~" + strings.TrimPrefix(name, home)
+				}
+			}
+			kept = append(kept, pending{dir: p.Dir, name: name})
+		}
+
+		type partial struct {
+			rows []session.Row
+			name string
+			dir  string
+		}
+		results := make([]partial, len(kept))
+		const workers = 8
+		sem := make(chan struct{}, workers)
+		var wg sync.WaitGroup
+		for i, p := range kept {
+			wg.Add(1)
+			go func(i int, dir, name string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				rows, _ := session.ListInProject(dir, includeArchived)
+				results[i] = partial{rows: rows, name: name, dir: dir}
+			}(i, p.dir, p.name)
+		}
+		wg.Wait()
+
+		var all []AllRow
+		for _, r := range results {
+			for _, row := range r.rows {
+				all = append(all, AllRow{Row: row, ProjectName: r.name, ProjectDir: r.dir})
+			}
+		}
+		return allLoadedMsg{rows: all}
 	}
 }
