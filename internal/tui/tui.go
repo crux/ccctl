@@ -248,7 +248,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
-	case "q", "ctrl-c":
+	case "q", "ctrl+c":
 		return m, tea.Quit
 	case ":":
 		m.cmdMode = true
@@ -270,14 +270,18 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.view == viewSessions {
 			return m.switchView(viewProjects)
 		}
-	case "h":
+	case "h", "left":
 		if m.view == viewSessions {
 			return m.switchView(viewProjects)
 		}
-	case "l":
+	case "l", "right":
 		if m.view == viewProjects {
 			return m.switchView(viewSessions)
 		}
+
+	// Refresh the current view off-cycle.
+	case "ctrl+r":
+		return m.refreshCurrentView()
 
 	// Cursor movement within the focused list
 	case "up", "k":
@@ -420,6 +424,30 @@ func (m Model) enterAction() (tea.Model, tea.Cmd) {
 		return m, focusCmd(p.UUID)
 	}
 	return m, nil
+}
+
+// refreshCurrentView reloads the data for whichever view is in focus,
+// off-cycle. :projects reloads the project list (and the sessions pane
+// follows via the cursor matcher); :sessions reloads the current
+// project's sessions; :active fires an off-cycle active-list load; the
+// 2 s tick continues to run on top. In every view the active-set is
+// refreshed too so markers stay honest.
+func (m Model) refreshCurrentView() (tea.Model, tea.Cmd) {
+	cmds := []tea.Cmd{loadActiveCmd()}
+	switch m.view {
+	case viewProjects:
+		m.projectsLoading = true
+		cmds = append(cmds, loadProjectsCmd(m.includeTmp))
+	case viewSessions:
+		if cmd := m.reloadSessions(); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+	case viewActive:
+		m.activeLoading = true
+		cmds = append(cmds, loadActiveListCmd())
+	}
+	m.status = "refreshing…"
+	return m, tea.Batch(cmds...)
 }
 
 // toggleIncludeArchived flips whether .zip rows show in the sessions

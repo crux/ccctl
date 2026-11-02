@@ -78,7 +78,7 @@ func (m Model) View() string {
 
 func (m Model) header() string {
 	title := fmt.Sprintf(" ccctl ui — :%s", m.view.label())
-	hint := "  (1/2/3 view · tab/h/l switch · j/k move · enter act · a archive · r restore · A show-arc · +/- </> resize · : cmd · q quit)"
+	hint := "  (1/2/3 view · tab/←→ switch · ↑↓ move · enter act · a archive · r restore · A show-arc · ^R refresh · +/- </> resize · : cmd · q quit)"
 	line := headerStyle.Render(title) + footerStyle.Render(hint)
 	// Cut the line at the terminal width: a wrapped header shifts the
 	// whole frame down by a row.
