@@ -51,7 +51,7 @@ func (v view) label() string {
 type allSortKey int
 
 const (
-	allSortMTime   allSortKey = iota // default
+	allSortMTime allSortKey = iota // default
 	allSortTitle
 	allSortSize
 	allSortProject
@@ -153,16 +153,16 @@ type Model struct {
 	// filtered + sorted view is computed on each render via
 	// allVisible() so cursor movement, filter edits and sort changes
 	// stay cheap and the raw data stays canonical.
-	all              []AllRow
-	allCursor        int
-	allLoading       bool
-	allLoaded        bool
-	allLastRefresh   time.Time
-	allSort          allSortKey
-	allSortDesc      bool
-	allStatusFilter  allStatus
-	filterMode       bool   // typing into the /… input
-	filterBuf        string // live filter text, incremental
+	all             []AllRow
+	allCursor       int
+	allLoading      bool
+	allLoaded       bool
+	allLastRefresh  time.Time
+	allSort         allSortKey
+	allSortDesc     bool
+	allStatusFilter allStatus
+	filterMode      bool   // typing into the /… input
+	filterBuf       string // live filter text, incremental
 
 	// Split ratios, percent of the available body region.
 	// topRowPct   — height of PROJECTS/SESSIONS row (vs DETAIL below).
