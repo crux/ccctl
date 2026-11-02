@@ -22,19 +22,16 @@ build: ## build bin/ccctl for this machine (no VERSION needed)
 install: ## go install ccctl into GOBIN
 	go install -ldflags "$(GO_LDFLAGS)" $(MAIN)
 
-check: vet test fmt-check ## everything CI checks
+check: lint test ## everything CI checks (lint = vet + staticcheck + gofmt + goimports + …)
 
-vet: ## go vet
-	go vet ./...
+lint: ## report lint findings (golangci-lint; `brew install golangci-lint`)
+	golangci-lint run ./...
+
+lint-fix: ## apply the auto-fixable lint findings (gofmt, goimports, simplifications)
+	golangci-lint run --fix ./...
 
 test: ## go test
 	go test ./...
-
-fmt-check: ## fail when gofmt would change a file
-	@test -z "$$(gofmt -l .)" || { echo "gofmt needed:"; gofmt -l .; exit 1; }
-
-fmt: ## gofmt the tree
-	gofmt -w .
 
 tidy: ## tidy go.mod / go.sum
 	go mod tidy
@@ -71,4 +68,4 @@ publish: require-version ## create the GitHub release from dist/ (CI)
 tap: require-version ## write the Homebrew formula and push it to the tap (CI)
 	bash scripts/tap.sh "$(VERSION)"
 
-.PHONY: help build install check vet test fmt-check fmt tidy test-real clean demo claude-install claude-check require-version release dist publish tap
+.PHONY: help build install check lint lint-fix test tidy test-real clean demo claude-install claude-check require-version release dist publish tap

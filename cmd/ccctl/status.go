@@ -150,10 +150,9 @@ func runStatus(cmd *cobra.Command, args []string) error {
 	if !scoped {
 		fmt.Printf("  Projects:          %d (%d active in last 7 days)\n", len(allStats), activeIn7d)
 	}
-	switch {
-	case totalArch == 0:
+	if totalArch == 0 {
 		fmt.Printf("  Sessions:          %d\n", totalLive)
-	default:
+	} else {
 		fmt.Printf("  Sessions:          %d live, %d archived\n", totalLive, totalArch)
 	}
 	fmt.Printf("  Total size:        %s\n", humanBytes(totalBytes))

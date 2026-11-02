@@ -22,5 +22,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Check (vet, test, gofmt)
+      - name: Install golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.15.0
+          install-only: true
+
+      - name: Check (lint + test)
         run: make check

@@ -1,0 +1,31 @@
+version: "2"
+
+# Conservative starting point. The default linter set (govet, errcheck,
+# ineffassign, staticcheck, unused) covers formatting-adjacent bugs and
+# dead-code; the formatters block adds gofmt + goimports via --fix.
+# Expand this file when a real pain point surfaces, not before.
+
+linters:
+  default: standard
+  settings:
+    errcheck:
+      # Close() errors on readers / closers are informational by the
+      # time Close runs. Standard Go idiom to ignore them. All other
+      # ignored errors need an explicit `_ =` at the call site.
+      exclude-functions:
+        # Close errors are informational by the time Close runs.
+        - (*os.File).Close
+        - (*archive/zip.ReadCloser).Close
+        - (*archive/zip.Writer).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        # Writes to an io.Writer in CLI output paths — a failing stdout
+        # kills the pipe, not us. Standard idiom.
+        - fmt.Fprintln
+        - fmt.Fprintf
+        - fmt.Fprint
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

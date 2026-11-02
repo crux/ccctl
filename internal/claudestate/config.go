@@ -182,24 +182,24 @@ func writeAtomic(path string, data []byte, perm fs.FileMode) error {
 	}
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		f.Close()
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Chmod(tmp, perm); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := os.Rename(tmp, path); err != nil {
-		os.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	return nil

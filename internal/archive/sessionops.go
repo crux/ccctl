@@ -47,11 +47,11 @@ func ArchiveSession(uuid string) (SessionArchiveResult, error) {
 	}
 
 	if err := Create(archivePath, sessionDir, items); err != nil {
-		os.Remove(archivePath)
+		_ = os.Remove(archivePath)
 		return SessionArchiveResult{}, fmt.Errorf("zip creation failed: %w", err)
 	}
 	if err := Validate(archivePath); err != nil {
-		os.Remove(archivePath)
+		_ = os.Remove(archivePath)
 		return SessionArchiveResult{}, fmt.Errorf("zip validation failed: %w", err)
 	}
 	for _, item := range items {

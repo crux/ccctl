@@ -137,9 +137,10 @@ func (m Model) renderBrowse(h int) string {
 
 	projStyle := paneStyle
 	sessStyle := paneStyle
-	if m.view == viewProjects {
+	switch m.view {
+	case viewProjects:
 		projStyle = activePaneStyle
-	} else if m.view == viewSessions {
+	case viewSessions:
 		sessStyle = activePaneStyle
 	}
 

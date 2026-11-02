@@ -572,7 +572,7 @@ func (m Model) allRowMatchesStatus(r AllRow) bool {
 		if r.Archived {
 			return false
 		}
-		return !(m.activeSet.Confident[r.UUID] || m.activeSet.Guessed[r.UUID])
+		return !m.activeSet.Confident[r.UUID] && !m.activeSet.Guessed[r.UUID]
 	case allStatusArchived:
 		return r.Archived
 	}

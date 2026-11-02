@@ -86,7 +86,7 @@ ambiguous. Write ./<id> for the path.`,
 func init() {
 	moveCmd.Flags().StringVar(&moveFromDir, "from", "",
 		"source project directory used to scope session-id completion (default: current directory)")
-	moveCmd.RegisterFlagCompletionFunc("from", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	_ = moveCmd.RegisterFlagCompletionFunc("from", func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
 		return nil, cobra.ShellCompDirectiveFilterDirs
 	})
 	moveCmd.Flags().BoolVarP(&moveDryRun, "dry-run", "n", false, "show what would move and change nothing")

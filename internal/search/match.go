@@ -112,7 +112,7 @@ func containsFoldASCII(hay, needle []byte) bool {
 	for start := 0; start < len(hay); start += foldChunk {
 		end := min(start+foldChunk+n-1, len(hay))
 		*bp = lowerASCII((*bp)[:0], hay[start:end])
-		if bytes.Index(*bp, needle) >= 0 {
+		if bytes.Contains(*bp, needle) {
 			return true
 		}
 		if end == len(hay) {
