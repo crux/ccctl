@@ -5,6 +5,7 @@
 package focus
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -26,6 +27,17 @@ type Location struct {
 	TmuxCoords string // session:window.pane; "" if not under tmux
 }
 
+// BackgroundError says that a session runs in the background: no
+// terminal shows it, so there is nothing to bring to the front.
+// `claude attach <ID>` opens it in a terminal.
+type BackgroundError struct {
+	ID string // the id `claude attach` takes
+}
+
+func (e *BackgroundError) Error() string {
+	return fmt.Sprintf("session runs in the background; open it with: claude attach %s", e.ID)
+}
+
 // Locate resolves a session UUID to a Location. Returns an error if the
 // session is not currently open by any running claude process.
 func Locate(uuid string) (*Location, error) {
@@ -36,13 +48,22 @@ func Locate(uuid string) (*Location, error) {
 	if ps == nil {
 		return nil, fmt.Errorf("no running claude process has session %s open", uuid)
 	}
-	ancestors, err := proc.PPIDAncestors(ps.PID)
+	loc, err := locatePID(ps.PID)
 	if err != nil {
 		return nil, err
 	}
-	terminal, tmuxCoords := identifyTerminal(ancestors, ps.PID)
+	loc.Session = ps
+	return loc, nil
+}
+
+// locatePID finds the terminal that a process runs in.
+func locatePID(pid int) (*Location, error) {
+	ancestors, err := proc.PPIDAncestors(pid)
+	if err != nil {
+		return nil, err
+	}
+	terminal, tmuxCoords := identifyTerminal(ancestors, pid)
 	return &Location{
-		Session:    ps,
 		Ancestors:  ancestors,
 		Terminal:   terminal,
 		TmuxCoords: tmuxCoords,
@@ -52,11 +73,62 @@ func Locate(uuid string) (*Location, error) {
 // ByUUID is the single entry point callers want: locate the session,
 // then bring its terminal (tmux pane, iTerm2 session, or Terminal.app
 // tab) to the front.
+//
+// A background session has no terminal of its own. When a `claude
+// attach` shows it in a terminal, ByUUID brings that terminal to the
+// front. Otherwise it returns a *BackgroundError.
 func ByUUID(uuid string) error {
 	loc, err := Locate(uuid)
 	if err != nil {
 		return err
 	}
+	// A session without a terminal in its ancestry can be a background
+	// session whose record does not say so; the process list knows.
+	if loc.Session.Kind == "bg" || (loc.Terminal == "" && loc.TmuxCoords == "") {
+		if err := background(uuid); err != errNotBackground {
+			return err
+		}
+	}
+	return focusAt(loc, loc.Session.PID, "session "+loc.Session.SessionID)
+}
+
+var errNotBackground = errors.New("not a background session")
+
+// background focuses the terminal of a `claude attach` that shows the
+// background session uuid, or returns a *BackgroundError. It returns
+// errNotBackground for a session that does not run in the background.
+func background(uuid string) error {
+	infos, err := proc.ListClaudeProcesses()
+	if err != nil {
+		return err
+	}
+	var s *proc.Info
+	for i := range infos {
+		if infos[i].Role == proc.RoleSession && infos[i].UUID == uuid && infos[i].Background {
+			s = &infos[i]
+		}
+	}
+	if s == nil {
+		return errNotBackground
+	}
+	for _, c := range infos {
+		if s.Attaches(c.AttachTarget()) {
+			return ByPID(c.PID)
+		}
+	}
+	return &BackgroundError{ID: s.AttachID()}
+}
+
+// ByPID brings the terminal that runs process pid to the front.
+func ByPID(pid int) error {
+	loc, err := locatePID(pid)
+	if err != nil {
+		return err
+	}
+	return focusAt(loc, pid, fmt.Sprintf("pid %d", pid))
+}
+
+func focusAt(loc *Location, pid int, what string) error {
 	// tmux takes priority: even inside iTerm2/Terminal, the authoritative
 	// place to focus is the tmux pane holding the claude process.
 	if loc.TmuxCoords != "" {
@@ -64,11 +136,11 @@ func ByUUID(uuid string) error {
 	}
 	switch loc.Terminal {
 	case "iTerm2":
-		return focusITerm2(loc.Session.PID)
+		return focusITerm2(pid)
 	case "Terminal.app":
-		return focusTerminalApp(loc.Session.PID)
+		return focusTerminalApp(pid)
 	case "":
-		return fmt.Errorf("no supported terminal detected in ancestry for session %s", loc.Session.SessionID)
+		return fmt.Errorf("no supported terminal detected in ancestry for %s", what)
 	default:
 		return fmt.Errorf("focus not implemented for %s (stub)", loc.Terminal)
 	}

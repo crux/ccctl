@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/crux/ccctl/internal/proc"
@@ -19,11 +21,16 @@ UUID, and title.
 
 Session UUID is the actual session the process has open, resolved in
 this order:
-  1. --resume <uuid> on the process command line (if present)
-  2. .jsonl file the process has open (via lsof) — authoritative
+  1. the session record ~/.claude/sessions/<pid>.json — authoritative
+  2. --resume <uuid> on the process command line (older Claude Code)
   3. newest .jsonl in the project directory for the process's cwd
-     (last-resort guess; may be wrong if multiple claude instances
-     share one project).`,
+     (last-resort guess, marked with ~; may be wrong if multiple
+     claude instances share one project).
+
+Background sessions (claude --bg, or a session sent to the background)
+run under a daemon with helper processes. Each helper is listed under
+the session or daemon it belongs to, marked with └ and a short note.
+'claude attach <id>' opens a background session in a terminal.`,
 	RunE: runPs,
 }
 
@@ -43,35 +50,55 @@ func runPs(cmd *cobra.Command, args []string) error {
 	// guess or ' ' when the UUID was resolved authoritatively), so the UUID
 	// bodies start at the same column either way.
 	fmt.Fprintln(w, "PID\tVERSION\tDIR\t UUID\tTITLE")
-	for _, p := range procs {
-		title := p.Title
-		if title == "" && p.SessionFile != "" {
+	for _, r := range proc.Arrange(procs) {
+		pid := strconv.Itoa(r.PID)
+		if r.Sub {
+			pid = "└ " + pid
+		}
+		version := r.Command
+		if version == "" {
+			version = "-"
+		}
+		if r.Role != proc.RoleSession {
+			role := strings.TrimPrefix(r.Label(), "└ ")
+			fmt.Fprintf(w, "%s\t%s\t-\t -\t%s: %s\n", pid, version, role, r.Note)
+			continue
+		}
+		title := r.Title
+		if title == "" && r.SessionFile != "" {
 			// Fallback for legacy-path PIDs where the title didn't come
 			// from PIDSession.Name — read the .jsonl ourselves.
-			if meta, err := session.ReadMeta(p.SessionFile); err == nil {
+			if meta, err := session.ReadMeta(r.SessionFile); err == nil {
 				title = meta.Display()
 			}
 		}
 		if title == "" {
 			title = "(no title)"
 		}
-		// Append a trailing "(busy)" when the session is actively
-		// processing. "idle" is the common state and left unmarked to
-		// keep the output quiet; anything else gets shown verbatim so
-		// future statuses surface automatically.
-		if p.Status != "" && p.Status != "idle" {
-			title = title + "  (" + p.Status + ")"
+		// Mark a session that is actively processing, and one that
+		// runs in the background. "idle" is the common state and left
+		// unmarked to keep the output quiet; any other status is shown
+		// verbatim so future statuses surface automatically.
+		var marks []string
+		if r.Status != "" && r.Status != "idle" {
+			marks = append(marks, r.Status)
+		}
+		if r.Background {
+			marks = append(marks, "background: claude attach "+r.AttachID())
+		}
+		if len(marks) > 0 {
+			title += "  (" + strings.Join(marks, ", ") + ")"
 		}
 		var uuid string
 		switch {
-		case p.UUID == "":
+		case r.UUID == "":
 			uuid = " -"
-		case p.GuessedUUID:
-			uuid = "~" + p.UUID
+		case r.GuessedUUID:
+			uuid = "~" + r.UUID
 		default:
-			uuid = " " + p.UUID
+			uuid = " " + r.UUID
 		}
-		fmt.Fprintf(w, "%d\t%s\t%s\t%s\t%s\n", p.PID, p.Command, shortDir(p.Cwd), uuid, title)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", pid, version, shortDir(r.Cwd), uuid, title)
 	}
 	return w.Flush()
 }

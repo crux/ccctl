@@ -75,7 +75,7 @@ func (p *Plan) Rebase() claudestate.Rebase {
 }
 
 // listProcesses is a variable so tests can replace the process scan.
-var listProcesses = proc.ListClaudeProcesses
+var listProcesses = proc.ListSessions
 
 // Prepare resolves the paths, finds the affected project folders and
 // runs every check. It changes nothing on disk. Invalid paths return

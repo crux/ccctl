@@ -182,7 +182,7 @@ func (m Model) renderActive(h int) string {
 	// Column widths. STATUS, PID and UUID stay fixed; TITLE and CWD
 	// share the remainder.
 	const (
-		statusW = 7
+		statusW = 8
 		pidW    = 7
 		uuidW   = 10
 		gapW    = 1
@@ -227,12 +227,19 @@ func (m Model) renderActive(h int) string {
 	return activePaneStyle.Width(w).Height(contentH).Render(padBlock(b.String(), contentH))
 }
 
-// formatActiveRow lays out one proc.Info into the fixed-plus-flex
-// columns used by renderActive.
-func formatActiveRow(p proc.Info, home string, statusW, pidW, uuidW, titleW, cwdW int) string {
-	status := p.Status
+// formatActiveRow lays out one proc.Row into the fixed-plus-flex
+// columns used by renderActive. A helper row of the daemon has no
+// session: its note runs across the TITLE and CWD columns.
+func formatActiveRow(p proc.Row, home string, statusW, pidW, uuidW, titleW, cwdW int) string {
+	status := p.Label()
 	if status == "" {
 		status = "—"
+	}
+	if p.Role != proc.RoleSession {
+		return padRight(status, statusW) + " " +
+			padRight(fmt.Sprintf("%d", p.PID), pidW) + " " +
+			padRight("", uuidW) + " " +
+			padRight(truncate(p.Note, titleW+1+cwdW), titleW+1+cwdW)
 	}
 	uuid := p.UUID
 	if len(uuid) > uuidW {

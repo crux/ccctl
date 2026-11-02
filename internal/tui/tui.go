@@ -9,11 +9,13 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/crux/ccctl/internal/focus"
 	"github.com/crux/ccctl/internal/proc"
 	"github.com/crux/ccctl/internal/project"
 	"github.com/crux/ccctl/internal/session"
@@ -71,7 +73,7 @@ type Model struct {
 	// while a load is in flight. activeTicking is true when the view is
 	// currently receiving 2s refreshes — gated so no work happens while
 	// the user is elsewhere.
-	active            []proc.Info
+	active            []proc.Row
 	activeCursor      int
 	activeLoading     bool
 	activeTicking     bool
@@ -164,7 +166,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "active: " + msg.err.Error()
 			return m, nil
 		}
-		m.active = msg.procs
+		m.active = msg.rows
 		if m.activeCursor >= len(m.active) {
 			if len(m.active) == 0 {
 				m.activeCursor = 0
@@ -184,6 +186,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(loadActiveListCmd(), activeTickCmd())
 
 	case focusDoneMsg:
+		var bg *focus.BackgroundError
+		if errors.As(msg.err, &bg) {
+			return m, attachCmd(msg.uuid, bg.ID)
+		}
 		if msg.err != nil {
 			m.status = fmt.Sprintf("focus %s: %v", shortUUID(msg.uuid), msg.err)
 		} else {
@@ -219,9 +225,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd := m.reloadSessions(); cmd != nil {
 			cmds = append(cmds, cmd)
 		}
-		if msg.err != nil {
+		switch {
+		case msg.err != nil && msg.attach:
+			m.status = fmt.Sprintf("attach %s: %v", shortUUID(msg.uuid), msg.err)
+		case msg.err != nil:
 			m.status = fmt.Sprintf("resume %s: %v", shortUUID(msg.uuid), msg.err)
-		} else {
+		case msg.attach:
+			m.status = fmt.Sprintf("back from claude attach %s — it keeps running in the background", shortUUID(msg.uuid))
+		default:
 			m.status = fmt.Sprintf("resumed %s — back from claude", shortUUID(msg.uuid))
 		}
 		return m, tea.Batch(cmds...)
@@ -360,7 +371,9 @@ func (m Model) runCommand(cmd string) (tea.Model, tea.Cmd) {
 //	:projects → switch to :sessions (next natural step in the drill-down)
 //	:sessions → focus if the session has a running process, resume via
 //	            tea.ExecProcess if not, status-hint if archived
-//	:active   → focus the row's UUID (every row is running by definition)
+//	:active   → focus the row's UUID (every row is running by definition);
+//	            a background session that no terminal shows is attached
+//	            here; a helper row of the daemon gets a hint
 func (m Model) enterAction() (tea.Model, tea.Cmd) {
 	switch m.view {
 	case viewProjects:
@@ -391,6 +404,14 @@ func (m Model) enterAction() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		p := m.active[m.activeCursor]
+		switch {
+		case p.AttachTarget() != "":
+			m.status = fmt.Sprintf("focusing %s…", p.AttachTarget())
+			return m, focusPIDCmd(p.PID)
+		case p.Role != proc.RoleSession:
+			m.status = helperHint(p)
+			return m, nil
+		}
 		if p.UUID == "" {
 			m.status = fmt.Sprintf("no uuid known for pid %d; cannot focus", p.PID)
 			return m, nil
@@ -595,4 +616,17 @@ func (m Model) currentProjectDir() string {
 		return ""
 	}
 	return m.projects[m.projectCursor].Dir
+}
+
+// helperHint explains a helper row of the daemon in the status line.
+func helperHint(r proc.Row) string {
+	switch r.Role {
+	case proc.RoleHost:
+		return fmt.Sprintf("host %d: %s — Enter on the session above opens it", r.PID, r.Note)
+	case proc.RoleDaemon:
+		return fmt.Sprintf("daemon %d runs the background sessions; it ends after the last one", r.PID)
+	case proc.RoleSpare:
+		return fmt.Sprintf("spare %d: the next claude --bg starts in it", r.PID)
+	}
+	return fmt.Sprintf("pid %d: %s", r.PID, r.Note)
 }

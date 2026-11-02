@@ -31,6 +31,8 @@ type PIDSession struct {
 	Name       string `json:"name"`
 	NameSource string `json:"nameSource"` // "user" (set by /rename) or "derived"
 	Status     string `json:"status"`     // "idle" / "busy" / ""
+	Kind       string `json:"kind"`       // "interactive" or "bg" (a background session)
+	JobID      string `json:"jobId"`      // background session: the id `claude attach` takes
 }
 
 // Title returns the session name when it is a real title. A "derived"
@@ -161,9 +163,11 @@ func PPIDAncestors(pid int) ([]Ancestor, error) {
 	return out, nil
 }
 
-// Info describes one running claude process and the session it has open.
+// Info describes one running claude process: a session with the session
+// it has open, or a helper process of the background-session daemon.
 type Info struct {
 	PID         int
+	PPID        int
 	Command     string // Claude Code version (e.g. "2.1.300")
 	Cwd         string // process working directory (absolute)
 	UUID        string // session UUID the process has open; "" if unknown
@@ -176,45 +180,118 @@ type Info struct {
 	// fallback; it may be wrong if the project has multiple active
 	// sessions. Only set in the legacy path.
 	GuessedUUID bool
+
+	Role       Role   // RoleSession, or what a helper process does
+	Background bool   // a session that runs under the daemon, not in a terminal
+	JobID      string // background session: the id `claude attach` takes
+	Args       string // helper process: its command line
+	spawnedBy  *spawnedBy
 }
 
-// ListClaudeProcesses returns one entry per running `claude` process.
+// AttachTarget returns the <id|name> of a `claude attach` process, or "".
+func (in Info) AttachTarget() string {
+	if in.Role != RoleCommand {
+		return ""
+	}
+	return attachTarget(in.Args)
+}
+
+// ListSessions returns the running Claude Code sessions, without the
+// helper processes of the daemon.
+func ListSessions() ([]Info, error) {
+	infos, err := ListClaudeProcesses()
+	if err != nil {
+		return nil, err
+	}
+	out := infos[:0]
+	for _, in := range infos {
+		if in.Role == RoleSession {
+			out = append(out, in)
+		}
+	}
+	return out, nil
+}
+
+// ListClaudeProcesses returns one entry per running claude process:
+// every session and every helper process of the daemon (see Role).
 //
-// Session UUID is resolved in this order:
+// A process with a session record (~/.claude/sessions/<pid>.json) is a
+// session. A process without one is a helper when its command line says
+// so. Otherwise it is a session of an older Claude Code, and its session
+// UUID is resolved in this order:
 //
 //  1. --resume <uuid> on the command line
-//  2. The .jsonl file the process has open (lsof) — authoritative
-//  3. Newest .jsonl in the project directory for cwd (last-resort guess)
+//  2. Newest .jsonl in the project directory for cwd (last-resort guess)
 func ListClaudeProcesses() ([]Info, error) {
-	pids, comms, err := listClaudePIDs()
-	if err != nil || len(pids) == 0 {
+	table, err := processTable()
+	if err != nil {
 		return nil, err
+	}
+	pids := claudePIDs(table)
+	if len(pids) == 0 {
+		return nil, nil
 	}
 
 	out := make([]Info, 0, len(pids))
-	var fallbackPIDs []int
+	var bare []int
 	for _, pid := range pids {
 		if ps, err := ReadPIDSession(pid); err == nil && ps.SessionID != "" {
 			out = append(out, Info{
 				PID:         pid,
+				PPID:        table[pid].ppid,
 				Command:     ps.Version,
 				Cwd:         ps.Cwd,
 				UUID:        ps.SessionID,
 				SessionFile: project.SessionFile(ps.Cwd, ps.SessionID),
 				Title:       ps.Title(),
 				Status:      ps.Status,
+				Background:  ps.Kind == "bg",
+				JobID:       ps.JobID,
 			})
 			continue
 		}
-		fallbackPIDs = append(fallbackPIDs, pid)
+		bare = append(bare, pid)
 	}
 
-	if len(fallbackPIDs) > 0 {
-		legacy, err := legacyListClaudeProcesses(fallbackPIDs, comms)
+	if len(bare) > 0 {
+		args, err := commandLines(bare)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, legacy...)
+		var legacy []int
+		for _, pid := range bare {
+			role := classify(args[pid])
+			if role == RoleSession {
+				legacy = append(legacy, pid)
+				continue
+			}
+			in := Info{PID: pid, PPID: table[pid].ppid, Role: role, Args: args[pid]}
+			if role == RoleDaemon {
+				in.spawnedBy = parseSpawnedBy(args[pid])
+			}
+			out = append(out, in)
+		}
+		if len(legacy) > 0 {
+			l, err := legacyListClaudeProcesses(legacy, table, args)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, l...)
+		}
+	}
+
+	// A session whose parent is a terminal host runs in the background,
+	// also when its record does not say so.
+	hosts := map[int]bool{}
+	for _, in := range out {
+		if in.Role == RoleHost {
+			hosts[in.PID] = true
+		}
+	}
+	for i := range out {
+		if out[i].Role == RoleSession && hosts[out[i].PPID] {
+			out[i].Background = true
+		}
 	}
 
 	sort.Slice(out, func(i, j int) bool { return out[i].PID < out[j].PID })
@@ -225,12 +302,8 @@ func ListClaudeProcesses() ([]Info, error) {
 // kept as a fallback for older claude builds that didn't write
 // ~/.claude/sessions/<pid>.json. Uses --resume arg if present, else
 // falls back to newest .jsonl in the process's project dir (a guess).
-func legacyListClaudeProcesses(pids []int, comms map[int]string) ([]Info, error) {
+func legacyListClaudeProcesses(pids []int, table map[int]psRow, args map[int]string) ([]Info, error) {
 	cwds, cmds, err := processDetails(pids)
-	if err != nil {
-		return nil, err
-	}
-	resume, err := resumeUUIDs(pids)
 	if err != nil {
 		return nil, err
 	}
@@ -239,9 +312,9 @@ func legacyListClaudeProcesses(pids []int, comms map[int]string) ([]Info, error)
 	for _, pid := range pids {
 		command := cmds[pid]
 		if command == "" {
-			command = comms[pid]
+			command = filepath.Base(table[pid].comm)
 		}
-		info := Info{PID: pid, Command: command, Cwd: cwds[pid], UUID: resume[pid]}
+		info := Info{PID: pid, PPID: table[pid].ppid, Command: command, Cwd: cwds[pid], UUID: resumeArg(args[pid])}
 		switch {
 		case info.UUID != "":
 			info.SessionFile = project.SessionFile(info.Cwd, info.UUID)
@@ -256,32 +329,68 @@ func legacyListClaudeProcesses(pids []int, comms map[int]string) ([]Info, error)
 	return out, nil
 }
 
-// listClaudePIDs returns PIDs (and their comm basenames) for processes
-// whose comm basename equals "claude". Uses macOS-style ps output.
-func listClaudePIDs() ([]int, map[int]string, error) {
-	raw, err := exec.Command("ps", "-A", "-o", "pid=", "-o", "comm=").Output()
+// psRow is one process in the process table.
+type psRow struct {
+	ppid int
+	comm string
+}
+
+// processTable returns pid → parent and process name for every process.
+// The name can contain spaces: a path with spaces, or a title such as
+// "claude bg-pty-host".
+func processTable() (map[int]psRow, error) {
+	raw, err := exec.Command("ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "comm=").Output()
 	if err != nil {
-		return nil, nil, fmt.Errorf("ps: %w", err)
+		return nil, fmt.Errorf("ps: %w", err)
 	}
-	var pids []int
-	cmds := map[int]string{}
+	table := map[int]psRow{}
 	for _, line := range strings.Split(string(raw), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		if len(fields) < 3 {
 			continue
 		}
-		base := filepath.Base(fields[1])
-		if base != "claude" {
+		pid, err1 := strconv.Atoi(fields[0])
+		ppid, err2 := strconv.Atoi(fields[1])
+		if err1 != nil || err2 != nil {
 			continue
 		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil {
-			continue
-		}
-		pids = append(pids, pid)
-		cmds[pid] = base
+		table[pid] = psRow{ppid: ppid, comm: strings.Join(fields[2:], " ")}
 	}
-	return pids, cmds, nil
+	return table, nil
+}
+
+// claudePIDs returns the PIDs of Claude Code processes, ascending: every
+// process with a Claude Code name, and every process with a session
+// record that runs a bare version binary (see versionRE).
+func claudePIDs(table map[int]psRow) []int {
+	records := recordPIDs()
+	var pids []int
+	for pid, row := range table {
+		if isClaudeComm(row.comm) || (records[pid] && looksLikeVersion(row.comm)) {
+			pids = append(pids, pid)
+		}
+	}
+	sort.Ints(pids)
+	return pids
+}
+
+// recordPIDs returns the PIDs that have a session record file.
+func recordPIDs() map[int]bool {
+	out := map[int]bool{}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return out
+	}
+	entries, err := os.ReadDir(filepath.Join(home, ".claude", "sessions"))
+	if err != nil {
+		return out
+	}
+	for _, e := range entries {
+		if pid, err := strconv.Atoi(strings.TrimSuffix(e.Name(), ".json")); err == nil && strings.HasSuffix(e.Name(), ".json") {
+			out[pid] = true
+		}
+	}
+	return out
 }
 
 // processDetails returns pid → cwd AND pid → command (runtime process title)
@@ -321,35 +430,37 @@ func processDetails(pids []int) (cwds, cmds map[int]string, err error) {
 
 var resumeArgRE = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
-// resumeUUIDs returns pid → session uuid, extracted from `--resume <uuid>`
-// arguments in each process's command line. PIDs without such an argument
-// are absent from the map.
-func resumeUUIDs(pids []int) (map[int]string, error) {
-	if len(pids) == 0 {
-		return nil, nil
-	}
+// commandLines returns pid → command line for the given PIDs.
+func commandLines(pids []int) (map[int]string, error) {
+	// ps exits 1 when a PID ended in between; the other lines still count.
 	raw, err := exec.Command("ps", "-p", joinInts(pids, ","), "-o", "pid=", "-o", "args=").Output()
-	if err != nil {
-		return nil, fmt.Errorf("ps -p: %w", err)
+	if err != nil && len(raw) == 0 {
+		return map[int]string{}, nil
 	}
 	out := map[int]string{}
 	for _, line := range strings.Split(string(raw), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
+		line = strings.TrimSpace(line)
+		pidText, rest, ok := strings.Cut(line, " ")
+		if !ok {
 			continue
 		}
-		pid, err := strconv.Atoi(fields[0])
-		if err != nil {
-			continue
-		}
-		for i := 1; i < len(fields)-1; i++ {
-			if fields[i] == "--resume" && resumeArgRE.MatchString(fields[i+1]) {
-				out[pid] = fields[i+1]
-				break
-			}
+		if pid, err := strconv.Atoi(pidText); err == nil {
+			out[pid] = strings.TrimSpace(rest)
 		}
 	}
 	return out, nil
+}
+
+// resumeArg returns the session uuid of a `--resume <uuid>` argument in
+// a command line, or "".
+func resumeArg(args string) string {
+	fields := strings.Fields(args)
+	for i := 0; i < len(fields)-1; i++ {
+		if fields[i] == "--resume" && resumeArgRE.MatchString(fields[i+1]) {
+			return fields[i+1]
+		}
+	}
+	return ""
 }
 
 // runLsof runs lsof and tolerates its exit code 1 (which it uses to signal
@@ -389,66 +500,51 @@ func IsFileOpen(path string) bool {
 // ActiveSet describes sessions currently open by any running claude
 // process, with resolution confidence and per-session status.
 //
-//	Confident — UUIDs resolved via PIDSession (authoritative) or
-//	            --resume arg (legacy)
-//	Guessed   — UUIDs from the newest-in-project-dir fallback;
-//	            right when one active session per project, maybe wrong
-//	            with several
-//	Status    — "idle" / "busy" / "" (unknown; set only when the
-//	            PIDSession path resolved the UUID)
+//	Confident  — UUIDs resolved via PIDSession (authoritative) or
+//	             --resume arg (legacy)
+//	Guessed    — UUIDs from the newest-in-project-dir fallback;
+//	             right when one active session per project, maybe wrong
+//	             with several
+//	Status     — "idle" / "busy" / "" (unknown; set only when the
+//	             PIDSession path resolved the UUID)
+//	Background — UUID → the id `claude attach` takes, for sessions that
+//	             run in the background
 type ActiveSet struct {
-	Confident map[string]bool
-	Guessed   map[string]bool
-	Status    map[string]string
+	Confident  map[string]bool
+	Guessed    map[string]bool
+	Status     map[string]string
+	Background map[string]string
 }
 
 // ActiveUUIDs enumerates currently-open sessions across all running
 // claude processes. For modern claude, authoritative via
 // ~/.claude/sessions/<pid>.json; legacy fallback uses --resume arg +
-// newest-in-dir guess.
+// newest-in-dir guess. Helper processes of the daemon do not count.
 func ActiveUUIDs() (ActiveSet, error) {
 	out := ActiveSet{
-		Confident: map[string]bool{},
-		Guessed:   map[string]bool{},
-		Status:    map[string]string{},
+		Confident:  map[string]bool{},
+		Guessed:    map[string]bool{},
+		Status:     map[string]string{},
+		Background: map[string]string{},
 	}
-	pids, _, err := listClaudePIDs()
-	if err != nil || len(pids) == 0 {
-		return out, err
-	}
-
-	var fallbackPIDs []int
-	for _, pid := range pids {
-		if ps, err := ReadPIDSession(pid); err == nil && ps.SessionID != "" {
-			out.Confident[ps.SessionID] = true
-			if ps.Status != "" {
-				out.Status[ps.SessionID] = ps.Status
-			}
-			continue
-		}
-		fallbackPIDs = append(fallbackPIDs, pid)
-	}
-	if len(fallbackPIDs) == 0 {
-		return out, nil
-	}
-
-	resume, err := resumeUUIDs(fallbackPIDs)
+	infos, err := ListSessions()
 	if err != nil {
 		return out, err
 	}
-	cwds, _, err := processDetails(fallbackPIDs)
-	if err != nil {
-		return out, err
-	}
-	for _, pid := range fallbackPIDs {
-		if u := resume[pid]; u != "" {
-			out.Confident[u] = true
+	for _, in := range infos {
+		if in.UUID == "" {
 			continue
 		}
-		if cwd := cwds[pid]; cwd != "" {
-			if _, uuid := project.NewestSessionFile(cwd); uuid != "" {
-				out.Guessed[uuid] = true
-			}
+		if in.GuessedUUID {
+			out.Guessed[in.UUID] = true
+		} else {
+			out.Confident[in.UUID] = true
+		}
+		if in.Status != "" {
+			out.Status[in.UUID] = in.Status
+		}
+		if in.Background {
+			out.Background[in.UUID] = in.AttachID()
 		}
 	}
 	return out, nil

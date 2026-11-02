@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"sort"
@@ -79,11 +80,11 @@ func loadActiveCmd() tea.Cmd {
 	}
 }
 
-// activeListLoadedMsg carries the full enumerated active-process list
-// for the :active view. The slice is already sorted by PID.
+// activeListLoadedMsg carries the full enumerated active-process list,
+// arranged for display (helper processes under their session or daemon).
 type activeListLoadedMsg struct {
-	procs []proc.Info
-	err   error
+	rows []proc.Row
+	err  error
 }
 
 // loadActiveListCmd runs the fuller ListClaudeProcesses — one entry
@@ -99,7 +100,7 @@ func loadActiveListCmd() tea.Cmd {
 				procs[i].Title = sessionTitle(procs[i].SessionFile, now)
 			}
 		}
-		return activeListLoadedMsg{procs: procs, err: err}
+		return activeListLoadedMsg{rows: proc.Arrange(procs), err: err}
 	}
 }
 
@@ -153,18 +154,29 @@ type focusDoneMsg struct {
 }
 
 // focusCmd runs focus.ByUUID in a goroutine; the TUI keeps rendering.
+// For a background session that no terminal shows, focus.ByUUID returns
+// a *focus.BackgroundError, and Update attaches it here instead.
 func focusCmd(uuid string) tea.Cmd {
 	return func() tea.Msg {
 		return focusDoneMsg{uuid: uuid, err: focus.ByUUID(uuid)}
 	}
 }
 
-// resumeDoneMsg carries the outcome of a `claude --resume` run. The
-// TUI reloads the active list on receipt so the row's state flips to
-// running after a successful resume.
+// focusPIDCmd brings the terminal of a process to the front, e.g. the
+// terminal where a `claude attach` shows a background session.
+func focusPIDCmd(pid int) tea.Cmd {
+	return func() tea.Msg {
+		return focusDoneMsg{uuid: fmt.Sprintf("pid %d", pid), err: focus.ByPID(pid)}
+	}
+}
+
+// resumeDoneMsg carries the outcome of a `claude --resume` or `claude
+// attach` run. The TUI reloads the active list on receipt so the row's
+// state flips to running after a successful resume.
 type resumeDoneMsg struct {
-	uuid string
-	err  error
+	uuid   string
+	attach bool
+	err    error
 }
 
 // resumeCmd suspends the TUI, runs `claude --resume <uuid>` with its
@@ -177,6 +189,17 @@ func resumeCmd(uuid, cwd string) tea.Cmd {
 	c.Env = os.Environ()
 	return tea.ExecProcess(c, func(err error) tea.Msg {
 		return resumeDoneMsg{uuid: uuid, err: err}
+	})
+}
+
+// attachCmd suspends the TUI and runs `claude attach <id>`, which shows
+// a background session in this terminal. The session keeps running in
+// the background when attach ends; the TUI comes back then.
+func attachCmd(uuid, id string) tea.Cmd {
+	c := exec.Command("claude", "attach", id)
+	c.Env = os.Environ()
+	return tea.ExecProcess(c, func(err error) tea.Msg {
+		return resumeDoneMsg{uuid: uuid, attach: true, err: err}
 	})
 }
 

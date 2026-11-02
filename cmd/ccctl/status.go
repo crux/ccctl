@@ -139,7 +139,7 @@ func runStatus(cmd *cobra.Command, args []string) error {
 			activeIn7d++
 		}
 	}
-	procs, _ := proc.ListClaudeProcesses()
+	procs, _ := proc.ListSessions()
 
 	// Output
 	if scoped {
