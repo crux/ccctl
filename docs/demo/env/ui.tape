@@ -50,3 +50,17 @@ Down
 Sleep 900ms
 Enter
 Sleep 3s
+
+# :all -> every session across every project; peek at one with Space
+Type "4"
+Sleep 2s
+Down
+Sleep 600ms
+Down
+Sleep 600ms
+Down
+Sleep 900ms
+Space
+Sleep 3s
+Space
+Sleep 1s
