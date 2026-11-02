@@ -158,7 +158,7 @@ func (m Model) renderPeekBody(w int) string {
 	r := m.peekRow
 	home, _ := os.UserHomeDir()
 
-	status := "idle"
+	status := "not running"
 	switch {
 	case r.Archived:
 		status = "archived"

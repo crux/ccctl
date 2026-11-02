@@ -3,7 +3,7 @@
 Output "/out/ui.gif"
 
 Set Shell "zsh"
-Set FontSize 14
+Set FontSize 18
 Set Width 1260
 Set Height 620
 Set Padding 14
@@ -43,14 +43,6 @@ Sleep 2.5s
 Enter
 Sleep 1.5s
 
-# :active -> jump to a running session
-Type "3"
-Sleep 2s
-Down
-Sleep 900ms
-Enter
-Sleep 3s
-
 # :all -> every session across every project; peek at one with Space
 Type "4"
 Sleep 2s
@@ -64,3 +56,12 @@ Space
 Sleep 3s
 Space
 Sleep 1s
+
+# :active -> jump to a running session (last beat: Enter leaves the
+# TUI for the session's terminal, so no further keys need to come back)
+Type "3"
+Sleep 2s
+Down
+Sleep 900ms
+Enter
+Sleep 3s
