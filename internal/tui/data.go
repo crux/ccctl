@@ -233,6 +233,27 @@ func restoreCmd(uuid string) tea.Cmd {
 	}
 }
 
+// peekTurnsLoadedMsg carries the first + last user-turn previews for
+// the Space quick-look overlay. uuid is echoed back so the handler can
+// drop stale replies (cursor moved, overlay closed).
+type peekTurnsLoadedMsg struct {
+	uuid  string
+	turns session.Turns
+}
+
+// peekTurnsPreviewChars bounds the character budget per turn preview.
+// Enough for a short paragraph; the overlay stays small.
+const peekTurnsPreviewChars = 480
+
+// loadPeekTurnsCmd reads a bounded preview of the first and last user
+// turns in path. Live .jsonl only; archived rows take a different path.
+func loadPeekTurnsCmd(uuid, path string) tea.Cmd {
+	return func() tea.Msg {
+		turns, _ := session.ReadTurns(path, peekTurnsPreviewChars)
+		return peekTurnsLoadedMsg{uuid: uuid, turns: turns}
+	}
+}
+
 // AllRow is one row for the :all cross-project view. Wraps session.Row
 // with the owning project's display name (abbreviated path when known,
 // encoded namespace basename otherwise).

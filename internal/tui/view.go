@@ -44,6 +44,20 @@ var (
 				Bold(true).
 				Foreground(lipgloss.Color("14"))
 
+	peekBoxStyle = lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("12")).
+			Background(lipgloss.Color("0")).
+			Padding(1, 2)
+
+	peekTitleStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("14"))
+
+	peekTurnLabelStyle = lipgloss.NewStyle().
+				Bold(true).
+				Foreground(lipgloss.Color("244"))
+
 	guessedMarkerStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("11"))
 
@@ -79,6 +93,12 @@ func (m Model) View() string {
 		body = m.renderAll(bodyHeight)
 	}
 
+	// Space quick-look sits ON TOP of the body — the row stays in the
+	// list behind it so closing the overlay is a visually quiet beat.
+	if m.peeking {
+		body = m.overlayPeek(body, bodyHeight)
+	}
+
 	return lipgloss.JoinVertical(lipgloss.Left, header, body, footer)
 }
 
@@ -106,6 +126,122 @@ func (m Model) footer() string {
 			m.view.label(), m.allSort.label(), sortDirMark(m.allSortDesc), m.allStatusFilter.label(), m.filterBuf))
 	}
 	return footerStyle.Render(fmt.Sprintf(" view=%s", m.view.label()))
+}
+
+// overlayPeek centers the Space quick-look overlay over the body. The
+// body underneath is passed through so the overlay has something to
+// paint over (its background style gives it its own fill); nothing is
+// mutated behind it, so closing is just a toggle.
+func (m Model) overlayPeek(body string, h int) string {
+	// Box sized to ~70% of the frame.
+	boxW := m.width * 70 / 100
+	if boxW < 48 {
+		boxW = 48
+	}
+	if boxW > m.width-4 {
+		boxW = m.width - 4
+	}
+	// Lipgloss places the box inside a bounded region; the body is used
+	// as the backdrop so the caller doesn't need a separate dimming pass.
+	box := peekBoxStyle.Width(boxW).Render(m.renderPeekBody(boxW - 6))
+	return lipgloss.Place(
+		m.width, h,
+		lipgloss.Center, lipgloss.Center,
+		box,
+		lipgloss.WithWhitespaceChars(" "),
+	)
+}
+
+// renderPeekBody fills the overlay with the peek row's metadata and
+// the first/last turn previews.
+func (m Model) renderPeekBody(w int) string {
+	r := m.peekRow
+	home, _ := os.UserHomeDir()
+
+	status := "idle"
+	switch {
+	case r.Archived:
+		status = "archived"
+	case m.activeSet.Confident[r.UUID]:
+		status = "running"
+		if st := m.activeSet.Status[r.UUID]; st != "" {
+			status = "running · " + st
+		}
+	case m.activeSet.Guessed[r.UUID]:
+		status = "guessed-active"
+	}
+
+	cwd := r.Meta.Cwd
+	if cwd == "" {
+		cwd = "—"
+	} else if home != "" && strings.HasPrefix(cwd, home) {
+		cwd = "~" + strings.TrimPrefix(cwd, home)
+	}
+
+	title := r.Meta.Display()
+
+	var b strings.Builder
+	b.WriteString(peekTitleStyle.Render("QUICK LOOK · " + title))
+	b.WriteString("\n")
+	b.WriteString(paneSubStyle.Render(strings.Repeat("─", w)))
+	b.WriteString("\n")
+	rows := []kv{
+		{"uuid", r.UUID},
+		{"cwd", cwd},
+		{"size", humanBytesCellTUI(r.Size)},
+		{"mtime", r.MTime.Format("2006-01-02 15:04")},
+		{"status", status},
+	}
+	b.WriteString(renderKV(rows, w))
+
+	b.WriteString("\n")
+	if !m.peekLoaded {
+		b.WriteString(peekTurnLabelStyle.Render("first + last turn") + "  " + paneSubStyle.Render("(reading…)"))
+		return b.String()
+	}
+	if r.Archived {
+		b.WriteString(peekTurnLabelStyle.Render("first + last turn") + "  " + paneSubStyle.Render("(archived — restore first to peek inside)"))
+		return b.String()
+	}
+	b.WriteString(peekTurnLabelStyle.Render("first turn"))
+	b.WriteString("\n")
+	b.WriteString(wrapTo(nonEmpty(m.peekTurns.First, "—"), w))
+	b.WriteString("\n\n")
+	b.WriteString(peekTurnLabelStyle.Render("last turn"))
+	b.WriteString("\n")
+	b.WriteString(wrapTo(nonEmpty(m.peekTurns.Last, "—"), w))
+	b.WriteString("\n\n")
+	b.WriteString(paneSubStyle.Render("space / esc close"))
+	return b.String()
+}
+
+// wrapTo folds s onto lines of at most w columns, breaking on spaces
+// where possible. Simple greedy wrap, no hyphenation.
+func wrapTo(s string, w int) string {
+	if w <= 1 {
+		return s
+	}
+	var lines []string
+	for _, para := range strings.Split(s, "\n") {
+		words := strings.Fields(para)
+		if len(words) == 0 {
+			lines = append(lines, "")
+			continue
+		}
+		cur := words[0]
+		for _, word := range words[1:] {
+			if lipgloss.Width(cur)+1+lipgloss.Width(word) > w {
+				lines = append(lines, cur)
+				cur = word
+				continue
+			}
+			cur += " " + word
+		}
+		if cur != "" {
+			lines = append(lines, cur)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // renderBrowse lays out the browse frame: PROJECTS and SESSIONS in a

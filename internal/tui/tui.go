@@ -164,6 +164,16 @@ type Model struct {
 	filterMode      bool   // typing into the /… input
 	filterBuf       string // live filter text, incremental
 
+	// peek is the Space quick-look overlay (rung 5). peeking is true
+	// when the overlay is drawn on top of the current view; peekRow is
+	// the session row it shows; peekTurns carries the first + last
+	// user-turn previews, loaded async via loadPeekTurnsCmd.
+	peeking     bool
+	peekRow     session.Row
+	peekTurns   session.Turns
+	peekLoaded  bool
+	peekLoadFor string // uuid whose turn-load is in flight; drops stale replies
+
 	// Split ratios, percent of the available body region.
 	// topRowPct   — height of PROJECTS/SESSIONS row (vs DETAIL below).
 	// projColPct  — width of PROJECTS within the top row (vs SESSIONS).
@@ -348,7 +358,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.filterMode {
 			return m.updateFilterMode(msg)
 		}
+		if m.peeking {
+			return m.updatePeekMode(msg)
+		}
 		return m.updateNormal(msg)
+
+	case peekTurnsLoadedMsg:
+		// Drop stale replies: cursor may have moved to a different row
+		// (or the overlay closed) while the read was in flight.
+		if !m.peeking || m.peekRow.UUID != msg.uuid {
+			return m, nil
+		}
+		m.peekLoaded = true
+		m.peekTurns = msg.turns
+		return m, nil
 	}
 	return m, nil
 }
@@ -412,6 +435,11 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		return m.enterAction()
 
+	// Space: non-destructive quick-look peek on the row under the cursor
+	// in :sessions and :all. Elsewhere, Space is a no-op.
+	case " ":
+		return m.openPeek()
+
 	// Session-row actions (`:sessions` and `:all`).
 	case "A":
 		return m.toggleIncludeArchived()
@@ -465,6 +493,44 @@ func (m Model) updateNormal(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, nil
+}
+
+// updatePeekMode routes keypresses while the Space quick-look overlay
+// is open. Space or Esc closes; every other key is ignored so the
+// overlay doesn't accidentally fire an action on the row underneath.
+func (m Model) updatePeekMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case " ", "esc", "q":
+		m.peeking = false
+		m.peekLoaded = false
+		m.peekTurns = session.Turns{}
+		return m, nil
+	}
+	return m, nil
+}
+
+// openPeek snapshots the row under the cursor and opens the quick-look
+// overlay. No-op in views that don't have session rows (:projects,
+// :active). Fires an async turn-tail load; the metadata is already in
+// hand so the overlay paints immediately with "(reading…)" where the
+// turn tails will land.
+func (m Model) openPeek() (tea.Model, tea.Cmd) {
+	r, ok := m.sessionRowForAction()
+	if !ok {
+		return m, nil
+	}
+	m.peeking = true
+	m.peekRow = r
+	m.peekTurns = session.Turns{}
+	m.peekLoaded = false
+	m.peekLoadFor = r.UUID
+	// Archived rows carry their turns inside the .zip; defer that path
+	// until it's useful.
+	if r.Archived {
+		m.peekLoaded = true
+		return m, nil
+	}
+	return m, loadPeekTurnsCmd(r.UUID, r.Path)
 }
 
 // updateFilterMode routes keypresses while the /… filter input is active
