@@ -1,3 +1,6 @@
 # Go build output
 /bin/
 /dist/
+
+# the plan: V.plan records in a private repository of their own, checked out here
+/plan/
