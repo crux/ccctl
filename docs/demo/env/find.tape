@@ -2,7 +2,7 @@
 Output "/out/find.gif"
 
 Set Shell "zsh"
-Set FontSize 14
+Set FontSize 16
 Set Width 1440
 Set Height 560
 Set Padding 14

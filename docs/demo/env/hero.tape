@@ -2,7 +2,7 @@
 Output "/out/hero.gif"
 
 Set Shell "zsh"
-Set FontSize 14
+Set FontSize 16
 Set Width 1260
 Set Height 500
 Set Padding 14
